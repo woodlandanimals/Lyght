@@ -13,7 +13,8 @@ const STALE_GENERATION_MS = 2 * 60 * 1000;
  * Background functions return 202 immediately and run for up to 15 minutes.
  */
 async function invokeBackgroundFunction(payload: Record<string, unknown>, request: NextRequest) {
-  const origin = request.nextUrl.origin;
+  // Use process.env.URL (set by Netlify) — request.nextUrl.origin returns internal Lambda URL
+  const origin = process.env.URL || `https://${request.headers.get("host")}`;
   const bgUrl = `${origin}/.netlify/functions/generate-plan-background`;
 
   console.log(`[issue-chat] Invoking background function: ${bgUrl}`);
