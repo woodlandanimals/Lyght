@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { prisma } from "./prisma";
 
 const SESSION_COOKIE = "lyght-session";
+const WORKSPACE_COOKIE = "lyght-workspace";
 
 export async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -11,6 +12,17 @@ export async function getCurrentUser() {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     include: {
+      organization: true,
+      organizationMemberships: {
+        include: { organization: true },
+      },
+      workspaceMemberships: {
+        include: {
+          workspace: {
+            include: { projects: true },
+          },
+        },
+      },
       projects: {
         include: { project: true },
       },
@@ -34,12 +46,43 @@ export async function setSession(userId: string) {
 export async function clearSession() {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE);
+  cookieStore.delete(WORKSPACE_COOKIE);
 }
 
 export async function getFirstProjectId(): Promise<string | null> {
   const user = await getCurrentUser();
   if (!user || user.projects.length === 0) return null;
   return user.projects[0].projectId;
+}
+
+export async function getActiveWorkspace() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  const cookieStore = await cookies();
+  const workspaceId = cookieStore.get(WORKSPACE_COOKIE)?.value;
+
+  if (workspaceId) {
+    const membership = user.workspaceMemberships.find(
+      (wm) => wm.workspaceId === workspaceId
+    );
+    if (membership) return membership.workspace;
+  }
+
+  // Fallback: first workspace
+  const first = user.workspaceMemberships[0];
+  return first?.workspace ?? null;
+}
+
+export async function setActiveWorkspace(workspaceId: string) {
+  const cookieStore = await cookies();
+  cookieStore.set(WORKSPACE_COOKIE, workspaceId, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 30,
+    path: "/",
+  });
 }
 
 /**
@@ -56,7 +99,6 @@ export class AuthError extends Error {
 
 /**
  * Require authentication. Returns the user or throws a 401 response.
- * Use in API routes: const user = await requireAuth();
  */
 export async function requireAuth(): Promise<NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>> {
   const user = await getCurrentUser();
@@ -68,7 +110,6 @@ export async function requireAuth(): Promise<NonNullable<Awaited<ReturnType<type
 
 /**
  * Require that the authenticated user has access to a specific project.
- * Returns the user or throws a 401/403 response.
  */
 export async function requireProjectAccess(projectId: string): Promise<NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>> {
   const user = await requireAuth();
@@ -85,6 +126,23 @@ export async function requireProjectAccess(projectId: string): Promise<NonNullab
 }
 
 /**
+ * Require that the authenticated user has access to a specific workspace.
+ */
+export async function requireWorkspaceAccess(workspaceId: string): Promise<NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>> {
+  const user = await requireAuth();
+
+  const membership = await prisma.workspaceMember.findUnique({
+    where: { userId_workspaceId: { userId: user.id, workspaceId } },
+  });
+
+  if (!membership) {
+    throw new AuthError("Forbidden: no access to this workspace", 403);
+  }
+
+  return user;
+}
+
+/**
  * Wrap an API handler to catch AuthErrors and return appropriate responses.
  */
 export function withAuth<T>(
@@ -95,7 +153,6 @@ export function withAuth<T>(
 
 /**
  * Helper to handle AuthError in catch blocks.
- * Usage: catch (error) { const authResponse = handleAuthError(error); if (authResponse) return authResponse; ... }
  */
 export function handleAuthError(error: unknown): Response | null {
   if (error instanceof AuthError) {

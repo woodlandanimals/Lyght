@@ -8,21 +8,94 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-model User {
+model Organization {
   id        String   @id @default(cuid())
   name      String
-  email     String   @unique
-  avatar    String?
-  role      String   @default("member")
+  slug      String   @unique
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  projects       ProjectMember[]
-  assignedIssues Issue[]         @relation("AssignedTo")
-  createdIssues  Issue[]         @relation("CreatedBy")
-  reviewItems    ReviewItem[]
-  comments       Comment[]
-  ledInitiatives     Initiative[] @relation("InitiativeLead")
-  createdInitiatives Initiative[] @relation("InitiativeCreatedBy")
+  members     OrganizationMember[]
+  workspaces  Workspace[]
+  invitations Invitation[]
+  users       User[]
+}
+
+model OrganizationMember {
+  id             String @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String @default("member") // "owner" | "admin" | "member"
+
+  user         User         @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([userId, organizationId])
+}
+
+model Workspace {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String
+  organizationId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  members      WorkspaceMember[]
+  projects     Project[]
+
+  @@unique([organizationId, slug])
+}
+
+model WorkspaceMember {
+  id          String @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        String @default("member") // "admin" | "member"
+
+  user      User      @relation(fields: [userId], references: [id])
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([userId, workspaceId])
+}
+
+model Invitation {
+  id             String   @id @default(cuid())
+  email          String
+  organizationId String
+  invitedById    String
+  role           String   @default("member")
+  token          String   @unique
+  status         String   @default("pending") // "pending" | "accepted" | "expired"
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  invitedBy    User         @relation("InvitedBy", fields: [invitedById], references: [id])
+}
+
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  passwordHash   String?
+  avatar         String?
+  role           String   @default("member")
+  organizationId String?
+  createdAt      DateTime @default(now())
+
+  organization            Organization?        @relation(fields: [organizationId], references: [id])
+  organizationMemberships OrganizationMember[]
+  workspaceMemberships    WorkspaceMember[]
+  projects                ProjectMember[]
+  assignedIssues          Issue[]              @relation("AssignedTo")
+  createdIssues           Issue[]              @relation("CreatedBy")
+  reviewItems             ReviewItem[]
+  comments                Comment[]
+  ledInitiatives          Initiative[]         @relation("InitiativeLead")
+  createdInitiatives      Initiative[]         @relation("InitiativeCreatedBy")
+  sentInvitations         Invitation[]         @relation("InvitedBy")
 }
 
 model Project {
@@ -31,9 +104,11 @@ model Project {
   key         String   @unique
   description String?
   repoUrl     String?
+  workspaceId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  workspace      Workspace?       @relation(fields: [workspaceId], references: [id])
   members        ProjectMember[]
   issues         Issue[]
   swarms         Swarm[]

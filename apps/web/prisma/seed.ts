@@ -1,20 +1,76 @@
 import { PrismaClient } from "@prisma/client";
+import { scryptSync, randomBytes } from "crypto";
 
 const prisma = new PrismaClient({});
 
+function hashPassword(password: string): string {
+  const salt = randomBytes(32).toString("hex");
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
 async function main() {
-  // Create demo user
+  // Create organization
+  const org = await prisma.organization.upsert({
+    where: { slug: "lyght-dev" },
+    update: {},
+    create: {
+      name: "Lyght Dev",
+      slug: "lyght-dev",
+    },
+  });
+
+  console.log("Created organization:", org.name);
+
+  // Create demo user with password
   const user = await prisma.user.upsert({
     where: { email: "demo@lyght.dev" },
     update: {},
     create: {
       name: "Demo User",
       email: "demo@lyght.dev",
+      passwordHash: hashPassword("password"),
       role: "admin",
+      organizationId: org.id,
     },
   });
 
-  console.log("Created user:", user.name);
+  console.log("Created user:", user.name, "(password: password)");
+
+  // Create org membership
+  await prisma.organizationMember.upsert({
+    where: { userId_organizationId: { userId: user.id, organizationId: org.id } },
+    update: {},
+    create: {
+      userId: user.id,
+      organizationId: org.id,
+      role: "owner",
+    },
+  });
+
+  // Create workspace
+  const workspace = await prisma.workspace.upsert({
+    where: { organizationId_slug: { organizationId: org.id, slug: "engineering" } },
+    update: {},
+    create: {
+      name: "Engineering",
+      slug: "engineering",
+      organizationId: org.id,
+    },
+  });
+
+  console.log("Created workspace:", workspace.name);
+
+  // Create workspace membership
+  await prisma.workspaceMember.upsert({
+    where: { userId_workspaceId: { userId: user.id, workspaceId: workspace.id } },
+    update: {},
+    create: {
+      userId: user.id,
+      workspaceId: workspace.id,
+      role: "admin",
+    },
+  });
 
   // Create demo project
   const project = await prisma.project.upsert({
@@ -24,6 +80,7 @@ async function main() {
       name: "Lyght",
       key: "LYG",
       description: "Agentic project management system",
+      workspaceId: workspace.id,
       members: {
         create: {
           userId: user.id,
@@ -50,7 +107,7 @@ async function main() {
       number: 2,
       title: "Design and implement user authentication",
       description: "Build a complete authentication system with login, registration, and session management.\n\n## Acceptance Criteria\n- Users can register and log in\n- Sessions persist across page reloads\n- Protected routes redirect unauthenticated users",
-      status: "in_progress",
+      status: "done",
       priority: "high",
       type: "feature",
       tags: "auth,security",
@@ -102,7 +159,8 @@ async function main() {
   }
 
   console.log("Created 5 sample issues");
-  console.log("Seed complete!");
+  console.log("\nSeed complete!");
+  console.log("Login with: demo@lyght.dev / password");
 }
 
 main()

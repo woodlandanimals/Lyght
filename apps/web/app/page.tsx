@@ -5,7 +5,7 @@ export default async function HomePage() {
   const user = await getCurrentUser();
 
   if (!user || user.projects.length === 0) {
-    redirect("/onboarding");
+    redirect("/login");
   }
 
   const firstProjectId = user.projects[0].projectId;
