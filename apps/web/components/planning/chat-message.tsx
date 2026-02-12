@@ -275,11 +275,17 @@ export function ChatMessage({
         </div>
       );
 
-    case "status_change":
+    case "status_change": {
+      const isGenerating = planStatus === "generating" && (
+        message.content.includes("Generating") || message.content.includes("executing")
+      );
       return (
         <div className="flex justify-center animate-message-in">
-          <div className="flex items-center gap-2 py-1">
-            <span className="text-[11px] font-mono text-lyght-grey-500">
+          <div className={`flex items-center gap-2 py-1 ${isGenerating ? "px-3 py-1.5 bg-lyght-orange/5 rounded-full border border-lyght-orange/15" : ""}`}>
+            {isGenerating && (
+              <span className="inline-block w-3 h-3 border-2 border-lyght-orange border-t-transparent rounded-full animate-spin" />
+            )}
+            <span className={`text-[11px] font-mono ${isGenerating ? "text-lyght-orange" : "text-lyght-grey-500"}`}>
               {message.content}
             </span>
             <span className="text-[10px] font-mono text-lyght-grey-500">
@@ -288,6 +294,7 @@ export function ChatMessage({
           </div>
         </div>
       );
+    }
 
     case "approval":
       return (

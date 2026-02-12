@@ -8,3 +8,7 @@
 [build.environment]
   NODE_VERSION = "20"
   NEXT_PRIVATE_STANDALONE = "true"
+
+[functions]
+  external_node_modules = ["@prisma/client"]
+  node_bundler = "esbuild"

@@ -66,7 +66,18 @@ export function InitiativeProperties({
         </PropertyRow>
         {planStatus !== "none" && (
           <PropertyRow label="Plan">
-            <Badge variant={planStatus === "approved" ? "green" : "blue"}>
+            <Badge
+              variant={
+                planStatus === "approved"
+                  ? "green"
+                  : planStatus === "generating"
+                    ? "orange"
+                    : "blue"
+              }
+            >
+              {planStatus === "generating" && (
+                <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1" />
+              )}
               {planStatus}
             </Badge>
           </PropertyRow>

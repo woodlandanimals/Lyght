@@ -77,7 +77,18 @@ export default async function IssuesPage({
               </Badge>
               <Badge>{issue.type}</Badge>
               {issue.planStatus !== "none" && (
-                <Badge variant={issue.planStatus === "approved" ? "green" : "blue"}>
+                <Badge
+                  variant={
+                    issue.planStatus === "approved"
+                      ? "green"
+                      : issue.planStatus === "generating"
+                        ? "orange"
+                        : "blue"
+                  }
+                >
+                  {issue.planStatus === "generating" && (
+                    <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1" />
+                  )}
                   {issue.planStatus}
                 </Badge>
               )}

@@ -113,9 +113,16 @@ export default async function InitiativesPage({
                 {ini.planStatus !== "none" && (
                   <Badge
                     variant={
-                      ini.planStatus === "approved" ? "green" : "blue"
+                      ini.planStatus === "approved"
+                        ? "green"
+                        : ini.planStatus === "generating"
+                          ? "orange"
+                          : "blue"
                     }
                   >
+                    {ini.planStatus === "generating" && (
+                      <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1" />
+                    )}
                     {ini.planStatus}
                   </Badge>
                 )}

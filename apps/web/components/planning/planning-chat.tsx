@@ -223,10 +223,13 @@ export function PlanningChat({
               : planStatus === "ready"
                 ? "blue"
                 : planStatus === "generating"
-                  ? "default"
+                  ? "orange"
                   : "default"
           }
         >
+          {planStatus === "generating" && (
+            <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1.5" />
+          )}
           {planStatus === "none" ? "no plan" : planStatus}
         </Badge>
       </div>
