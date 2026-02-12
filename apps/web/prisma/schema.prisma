@@ -1,0 +1,256 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  avatar    String?
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  projects       ProjectMember[]
+  assignedIssues Issue[]         @relation("AssignedTo")
+  createdIssues  Issue[]         @relation("CreatedBy")
+  reviewItems    ReviewItem[]
+  comments       Comment[]
+  ledInitiatives     Initiative[] @relation("InitiativeLead")
+  createdInitiatives Initiative[] @relation("InitiativeCreatedBy")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  key         String   @unique
+  description String?
+  repoUrl     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members        ProjectMember[]
+  issues         Issue[]
+  swarms         Swarm[]
+  initiatives    Initiative[]
+  mcpConnections McpConnection[]
+}
+
+model ProjectMember {
+  id        String @id @default(cuid())
+  userId    String
+  projectId String
+  role      String @default("member")
+
+  user    User    @relation(fields: [userId], references: [id])
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@unique([userId, projectId])
+}
+
+model Issue {
+  id          String   @id @default(cuid())
+  number      Int
+  title       String
+  description String
+  status      String   @default("triage")
+  priority    String   @default("medium")
+  type        String   @default("task")
+
+  projectId    String
+  assigneeId   String?
+  createdById  String
+  parentId     String?
+  swarmId      String?
+  initiativeId String?
+
+  aiPlan     String?
+  aiPrompt   String?
+  aiContext   String?
+  planStatus String @default("none")
+
+  agentSessionId String?
+  agentModel     String?
+  agentOutput    String?
+
+  estimate  Int?
+  tags      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project     Project    @relation(fields: [projectId], references: [id])
+  assignee    User?      @relation("AssignedTo", fields: [assigneeId], references: [id])
+  createdBy   User       @relation("CreatedBy", fields: [createdById], references: [id])
+  parent      Issue?      @relation("SubIssues", fields: [parentId], references: [id])
+  children    Issue[]     @relation("SubIssues")
+  swarm       Swarm?      @relation(fields: [swarmId], references: [id])
+  initiative  Initiative? @relation("InitiativeIssues", fields: [initiativeId], references: [id])
+
+  comments         Comment[]
+  reviewItems      ReviewItem[]
+  agentRuns        AgentRun[]
+  planningMessages PlanningMessage[]
+
+  @@unique([projectId, number])
+}
+
+model Swarm {
+  id          String   @id @default(cuid())
+  name        String
+  status      String   @default("forming")
+  objective   String
+  strategy    String?
+
+  projectId   String
+
+  totalTasks     Int @default(0)
+  completedTasks Int @default(0)
+  blockedTasks   Int @default(0)
+  activeAgents   Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project    @relation(fields: [projectId], references: [id])
+  issues    Issue[]
+  agentRuns AgentRun[]
+}
+
+model AgentRun {
+  id     String @id @default(cuid())
+  status String @default("queued")
+
+  issueId String
+  swarmId String?
+
+  model        String  @default("claude-sonnet-4-20250514")
+  prompt       String
+  systemPrompt String?
+
+  output     String?
+  tokensUsed Int    @default(0)
+  cost       Float  @default(0)
+  iterations Int    @default(0)
+
+  blockerType    String?
+  blockerMessage String?
+  humanResponse  String?
+
+  agentType      String?
+  acknowledgedAt DateTime?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  issue Issue  @relation(fields: [issueId], references: [id])
+  swarm Swarm? @relation(fields: [swarmId], references: [id])
+}
+
+model ReviewItem {
+  id     String @id @default(cuid())
+  type   String
+  status String @default("pending")
+
+  issueId    String
+  reviewerId String?
+
+  content  String
+  feedback String?
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  issue    Issue @relation(fields: [issueId], references: [id])
+  reviewer User? @relation(fields: [reviewerId], references: [id])
+}
+
+model Comment {
+  id     String @id @default(cuid())
+  body   String
+  author String @default("human")
+
+  issueId String
+  userId  String?
+
+  createdAt DateTime @default(now())
+
+  issue Issue @relation(fields: [issueId], references: [id])
+  user  User? @relation(fields: [userId], references: [id])
+}
+
+model PlanningMessage {
+  id           String   @id @default(cuid())
+  issueId      String?
+  initiativeId String?
+  role         String   // "user" | "assistant" | "system"
+  type         String   // "text" | "plan" | "agent_output" | "blocker" | "status_change" | "approval" | "error"
+  content      String
+  metadata     String?
+  createdAt    DateTime @default(now())
+
+  issue      Issue?      @relation(fields: [issueId], references: [id])
+  initiative Initiative? @relation(fields: [initiativeId], references: [id])
+}
+
+model Initiative {
+  id          String   @id @default(cuid())
+  number      Int
+  title       String
+  description String   @default("")
+  status      String   @default("planned")
+  priority    String   @default("medium")
+
+  projectId   String
+  leadId      String?
+  createdById String
+
+  aiPlan      String?
+  aiPrompt    String?
+  aiContext    String?
+  planStatus  String   @default("none")
+
+  startDate   DateTime?
+  targetDate  DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project          Project            @relation(fields: [projectId], references: [id])
+  lead             User?              @relation("InitiativeLead", fields: [leadId], references: [id])
+  createdBy        User               @relation("InitiativeCreatedBy", fields: [createdById], references: [id])
+  issues           Issue[]            @relation("InitiativeIssues")
+  planningMessages PlanningMessage[]
+
+  @@unique([projectId, number])
+}
+
+model McpConnection {
+  id          String   @id @default(cuid())
+  projectId   String
+
+  name        String
+  serverId    String
+  transport   String   @default("http")
+  url         String   @default("")
+
+  authType    String   @default("none")
+  authToken   String?
+
+  status      String   @default("disconnected")
+  lastPingAt  DateTime?
+  toolsJson   String?
+
+  enabled     Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project  @relation(fields: [projectId], references: [id])
+
+  @@unique([projectId, serverId])
+}

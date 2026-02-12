@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-lyght-black: #0A0A0A;
+  --color-lyght-white: #FAFAFA;
+  --color-lyght-grey-100: #F0F0F0;
+  --color-lyght-grey-300: #C0C0C0;
+  --color-lyght-grey-500: #808080;
+  --color-lyght-grey-700: #404040;
+  --color-lyght-orange: #FF6B00;
+  --color-lyght-green: #00CC66;
+  --color-lyght-red: #FF3333;
+  --color-lyght-blue: #3366FF;
+  --color-lyght-yellow: #FFB800;
+
+  --font-mono: var(--font-jetbrains-mono), "JetBrains Mono", "SF Mono", "IBM Plex Mono", monospace;
+  --font-sans: var(--font-inter), "Inter", -apple-system, sans-serif;
+}
+
+:root {
+  --background: #FAFAFA;
+  --foreground: #0A0A0A;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Status LED pulse animation */
+@keyframes pulse-led {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.animate-pulse-led {
+  animation: pulse-led 2s ease-in-out infinite;
+}
+
+/* Popover animation */
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-popover-in {
+  animation: popover-in 150ms ease-out;
+}
+
+/* Notification slide-in animation */
+@keyframes notification-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-notification-in {
+  animation: notification-in 200ms ease-out;
+}
+
+/* Chat message slide-up animation */
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message-in {
+  animation: message-in 200ms ease-out;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAFAFA;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #C0C0C0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #808080;
+}
+
+/* Selection */
+::selection {
+  background: #FF6B00;
+  color: #FAFAFA;
+}
