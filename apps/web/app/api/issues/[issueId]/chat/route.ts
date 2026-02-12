@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { callClaude, estimateCost } from "@/lib/ai/claude";
+import { callClaudeStreaming, estimateCost } from "@/lib/ai/claude";
 import { requireAuth, handleAuthError } from "@/lib/auth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -176,6 +175,106 @@ export async function POST(
   }
 }
 
+// --- Streaming helper ---
+
+/**
+ * Returns a streaming response that keeps the Netlify function alive
+ * while Claude generates content. Writes the result to DB when done.
+ */
+function streamingClaudeCall(
+  issueId: string,
+  claudeParams: {
+    system: string;
+    messages: { role: "user" | "assistant"; content: string }[];
+    maxTokens: number;
+  },
+  issue: IssueWithProject,
+  errorResetStatus: string,
+  onSuccess: (response: string, parsed: Record<string, unknown>, cost: number, inputTokens: number, outputTokens: number) => Promise<void>,
+  onApiKeyError?: () => Promise<void>,
+) {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await callClaudeStreaming({
+          ...claudeParams,
+          onChunk: () => {
+            // Send a heartbeat to keep the connection alive
+            controller.enqueue(encoder.encode(" "));
+          },
+        });
+
+        // Check for API key error
+        if (response.includes("ANTHROPIC_API_KEY not configured")) {
+          await prisma.planningMessage.create({
+            data: {
+              issueId,
+              role: "system",
+              type: "error",
+              content: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+            },
+          });
+          await prisma.issue.update({
+            where: { id: issueId },
+            data: { planStatus: errorResetStatus },
+          });
+          if (onApiKeyError) await onApiKeyError();
+          controller.enqueue(encoder.encode(JSON.stringify({ success: false, planStatus: errorResetStatus })));
+          controller.close();
+          return;
+        }
+
+        // Estimate cost
+        const inputTokens = Math.ceil(
+          claudeParams.messages.reduce((acc, m) => acc + m.content.length, 0) / 4
+        );
+        const outputTokens = Math.ceil(response.length / 4);
+        const cost = estimateCost(inputTokens, outputTokens);
+
+        // Try to parse JSON from response
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw: response };
+
+        await onSuccess(response, parsed, cost, inputTokens, outputTokens);
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: true })));
+        controller.close();
+      } catch (err) {
+        console.error("Streaming Claude call failed:", err);
+
+        await prisma.planningMessage.create({
+          data: {
+            issueId,
+            role: "system",
+            type: "error",
+            content: "Failed. Please try again.",
+            metadata: JSON.stringify({
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          },
+        });
+
+        await prisma.issue.update({
+          where: { id: issueId },
+          data: { planStatus: errorResetStatus },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+    },
+  });
+}
+
 // --- Action Handlers ---
 
 async function handleGeneratePlan(issue: IssueWithProject) {
@@ -194,20 +293,9 @@ async function handleGeneratePlan(issue: IssueWithProject) {
     data: { planStatus: "generating" },
   });
 
-  // Use after() to run Claude API call after the response is sent
-  after(async () => {
-    await runPlanGeneration(issue);
-  });
-
-  return NextResponse.json({
-    success: true,
-    planStatus: "generating",
-  });
-}
-
-async function runPlanGeneration(issue: IssueWithProject) {
-  try {
-    const response = await callClaude({
+  return streamingClaudeCall(
+    issue.id,
+    {
       system: `You are Lyght's planning agent. You decompose software issues into executable task plans for AI coding agents.
 
 Your plans must be:
@@ -224,7 +312,7 @@ When you encounter ambiguity:
 Output format: JSON matching the CodingPlan schema.`,
       messages: [
         {
-          role: "user",
+          role: "user" as const,
           content: `Issue: ${issue.title}
 Description: ${issue.description}
 Project: ${issue.project.name}
@@ -255,78 +343,35 @@ Respond in JSON:
         },
       ],
       maxTokens: 8192,
-    });
+    },
+    issue,
+    "none", // resetPlanStatus on error
+    async (response, parsed, cost, inputTokens, outputTokens) => {
+      const planJson = JSON.stringify(parsed, null, 2);
 
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
+      // Save plan message
       await prisma.planningMessage.create({
         data: {
           issueId: issue.id,
-          role: "system",
-          type: "error",
-          content:
-            "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+          role: "assistant",
+          type: "plan",
+          content: planJson,
+          metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
         },
       });
+
+      // Update issue
       await prisma.issue.update({
         where: { id: issue.id },
-        data: { planStatus: "none" },
+        data: {
+          aiPlan: planJson,
+          aiPrompt: (parsed as Record<string, string>).agentPrompt || "",
+          planStatus: "ready",
+          status: issue.status === "planning" ? "planned" : issue.status,
+        },
       });
-      return;
-    }
-
-    // Estimate cost
-    const inputTokens = Math.ceil(
-      (issue.title.length + issue.description.length + 800) / 4
-    );
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
-    const planJson = JSON.stringify(parsed, null, 2);
-
-    // Save plan message
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "assistant",
-        type: "plan",
-        content: planJson,
-        metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
-      },
-    });
-
-    // Update issue
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: {
-        aiPlan: planJson,
-        aiPrompt: parsed.agentPrompt || "",
-        planStatus: "ready",
-        status: issue.status === "planning" ? "planned" : issue.status,
-      },
-    });
-  } catch (err) {
-    console.error("Plan generation failed:", err);
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "system",
-        type: "error",
-        content: "Failed to generate plan. Please try again.",
-        metadata: JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      },
-    });
-
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: { planStatus: "none" },
-    });
-  }
+    },
+  );
 }
 
 async function handleRevisePlan(issue: IssueWithProject, feedback: string) {
@@ -352,25 +397,14 @@ async function handleRevisePlan(issue: IssueWithProject, feedback: string) {
     data: { planStatus: "generating" },
   });
 
-  // Use after() to run the revision in the background
-  after(async () => {
-    await runPlanRevision(issue, feedback);
-  });
-
-  return NextResponse.json({
-    success: true,
-    planStatus: "generating",
-  });
-}
-
-async function runPlanRevision(issue: IssueWithProject, feedback: string) {
-  try {
-    const response = await callClaude({
+  return streamingClaudeCall(
+    issue.id,
+    {
       system:
         "You are Lyght's planning agent. Revise the coding plan based on human feedback. Return the complete revised plan in JSON.",
       messages: [
         {
-          role: "user",
+          role: "user" as const,
           content: `Issue: ${issue.title}
 Description: ${issue.description}
 Original Plan: ${issue.aiPlan}
@@ -381,75 +415,32 @@ Revise the plan to address the feedback. Return the complete revised plan in the
         },
       ],
       maxTokens: 8192,
-    });
+    },
+    issue,
+    "ready", // on error, reset to "ready" since we have an existing plan
+    async (response, parsed, cost, inputTokens, outputTokens) => {
+      const planJson = JSON.stringify(parsed, null, 2);
 
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
       await prisma.planningMessage.create({
         data: {
           issueId: issue.id,
-          role: "system",
-          type: "error",
-          content:
-            "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+          role: "assistant",
+          type: "plan",
+          content: planJson,
+          metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
         },
       });
+
       await prisma.issue.update({
         where: { id: issue.id },
-        data: { planStatus: "ready" },
+        data: {
+          aiPlan: planJson,
+          aiPrompt: (parsed as Record<string, string>).agentPrompt || issue.aiPrompt,
+          planStatus: "ready",
+        },
       });
-      return;
-    }
-
-    const inputTokens = Math.ceil(
-      (issue.title.length +
-        issue.description.length +
-        (issue.aiPlan?.length || 0) +
-        feedback.length) /
-        4
-    );
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
-    const planJson = JSON.stringify(parsed, null, 2);
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "assistant",
-        type: "plan",
-        content: planJson,
-        metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
-      },
-    });
-
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: {
-        aiPlan: planJson,
-        aiPrompt: parsed.agentPrompt || issue.aiPrompt,
-        planStatus: "ready",
-      },
-    });
-  } catch (err) {
-    console.error("Plan revision failed:", err);
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "system",
-        type: "error",
-        content: "Failed to revise plan. Please try again.",
-      },
-    });
-
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: { planStatus: "ready" },
-    });
-  }
+    },
+  );
 }
 
 async function handleApprovePlan(issue: IssueWithProject) {
@@ -526,143 +517,152 @@ Report your output as:
     data: { status: "in_progress", agentSessionId: agentRun.id },
   });
 
-  // Use after() for the long-running execution
-  after(async () => {
-    await runAgentExecution(issue, agentRun);
-  });
+  // Use streaming to keep the function alive during execution
+  const encoder = new TextEncoder();
 
-  return NextResponse.json({
-    success: true,
-    agentRunId: agentRun.id,
-    status: "running",
-  });
-}
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await callClaudeStreaming({
+          system: agentRun.systemPrompt || undefined,
+          messages: [{ role: "user", content: agentRun.prompt }],
+          maxTokens: 8192,
+          onChunk: () => {
+            controller.enqueue(encoder.encode(" "));
+          },
+        });
 
-async function runAgentExecution(
-  issue: IssueWithProject,
-  agentRun: { id: string; prompt: string; systemPrompt: string | null }
-) {
-  try {
-    const response = await callClaude({
-      system: agentRun.systemPrompt || undefined,
-      messages: [{ role: "user", content: agentRun.prompt }],
-      maxTokens: 8192,
-    });
-
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
-      await prisma.agentRun.update({
-        where: { id: agentRun.id },
-        data: { status: "failed", output: "API key not configured" },
-      });
-      await prisma.planningMessage.create({
-        data: {
-          issueId: issue.id,
-          role: "system",
-          type: "error",
-          content: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
-        },
-      });
-      await prisma.issue.update({
-        where: { id: issue.id },
-        data: { status: issue.status },
-      });
-      return;
-    }
-
-    const inputTokens = Math.ceil(agentRun.prompt.length / 4);
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
-
-    // Try to parse structured response
-    let status = "completed";
-    let blockerType = null;
-    let blockerMessage = null;
-
-    try {
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.status === "blocked" && parsed.blockerQuestion) {
-          status = "waiting_review";
-          blockerType = "question";
-          blockerMessage = parsed.blockerQuestion;
+        // Check for API key error
+        if (response.includes("ANTHROPIC_API_KEY not configured")) {
+          await prisma.agentRun.update({
+            where: { id: agentRun.id },
+            data: { status: "failed", output: "API key not configured" },
+          });
+          await prisma.planningMessage.create({
+            data: {
+              issueId: issue.id,
+              role: "system",
+              type: "error",
+              content: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+            },
+          });
+          await prisma.issue.update({
+            where: { id: issue.id },
+            data: { status: issue.status },
+          });
+          controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+          controller.close();
+          return;
         }
+
+        const inputTokens = Math.ceil(agentRun.prompt.length / 4);
+        const outputTokens = Math.ceil(response.length / 4);
+        const cost = estimateCost(inputTokens, outputTokens);
+
+        // Try to parse structured response
+        let status = "completed";
+        let blockerType = null;
+        let blockerMessage = null;
+
+        try {
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.status === "blocked" && parsed.blockerQuestion) {
+              status = "waiting_review";
+              blockerType = "question";
+              blockerMessage = parsed.blockerQuestion;
+            }
+          }
+        } catch {
+          // Not JSON, treat as completed
+        }
+
+        // Update agent run
+        await prisma.agentRun.update({
+          where: { id: agentRun.id },
+          data: {
+            status,
+            output: response,
+            tokensUsed: inputTokens + outputTokens,
+            cost,
+            iterations: 1,
+            completedAt: status === "completed" ? new Date() : null,
+            blockerType,
+            blockerMessage,
+          },
+        });
+
+        // Update issue
+        await prisma.issue.update({
+          where: { id: issue.id },
+          data: {
+            agentOutput: response,
+            status: "in_review",
+          },
+        });
+
+        if (status === "waiting_review" && blockerMessage) {
+          await prisma.planningMessage.create({
+            data: {
+              issueId: issue.id,
+              role: "assistant",
+              type: "blocker",
+              content: blockerMessage,
+              metadata: JSON.stringify({ runId: agentRun.id, cost }),
+            },
+          });
+
+          await prisma.reviewItem.create({
+            data: {
+              type: "question",
+              issueId: issue.id,
+              content: blockerMessage,
+            },
+          });
+        } else {
+          await prisma.planningMessage.create({
+            data: {
+              issueId: issue.id,
+              role: "assistant",
+              type: "agent_output",
+              content: response,
+              metadata: JSON.stringify({ runId: agentRun.id, cost }),
+            },
+          });
+        }
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: true, status })));
+        controller.close();
+      } catch (error) {
+        console.error("Agent execution failed:", error);
+
+        await prisma.agentRun.update({
+          where: { id: agentRun.id },
+          data: { status: "failed", output: String(error) },
+        });
+
+        await prisma.planningMessage.create({
+          data: {
+            issueId: issue.id,
+            role: "system",
+            type: "error",
+            content: `Agent execution failed: ${String(error).substring(0, 200)}`,
+          },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+        controller.close();
       }
-    } catch {
-      // Not JSON, treat as completed
-    }
+    },
+  });
 
-    // Update agent run
-    await prisma.agentRun.update({
-      where: { id: agentRun.id },
-      data: {
-        status,
-        output: response,
-        tokensUsed: inputTokens + outputTokens,
-        cost,
-        iterations: 1,
-        completedAt: status === "completed" ? new Date() : null,
-        blockerType,
-        blockerMessage,
-      },
-    });
-
-    // Update issue
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: {
-        agentOutput: response,
-        status: "in_review",
-      },
-    });
-
-    if (status === "waiting_review" && blockerMessage) {
-      await prisma.planningMessage.create({
-        data: {
-          issueId: issue.id,
-          role: "assistant",
-          type: "blocker",
-          content: blockerMessage,
-          metadata: JSON.stringify({ runId: agentRun.id, cost }),
-        },
-      });
-
-      await prisma.reviewItem.create({
-        data: {
-          type: "question",
-          issueId: issue.id,
-          content: blockerMessage,
-        },
-      });
-    } else {
-      await prisma.planningMessage.create({
-        data: {
-          issueId: issue.id,
-          role: "assistant",
-          type: "agent_output",
-          content: response,
-          metadata: JSON.stringify({ runId: agentRun.id, cost }),
-        },
-      });
-    }
-  } catch (error) {
-    console.error("Agent execution failed:", error);
-
-    await prisma.agentRun.update({
-      where: { id: agentRun.id },
-      data: { status: "failed", output: String(error) },
-    });
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "system",
-        type: "error",
-        content: `Agent execution failed: ${String(error).substring(0, 200)}`,
-      },
-    });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+    },
+  });
 }
 
 async function handleRespond(
@@ -713,100 +713,111 @@ async function handleRespond(
     },
   });
 
-  // Use after() for the long-running re-execution
-  after(async () => {
-    await runAgentContinuation(issue, agentRun, humanResponse);
+  // Use streaming to keep the function alive during continuation
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await callClaudeStreaming({
+          system: agentRun.systemPrompt || undefined,
+          messages: [
+            { role: "user", content: agentRun.prompt },
+            { role: "assistant", content: agentRun.output || "" },
+            {
+              role: "user",
+              content: `Human response to your question: ${humanResponse}\n\nPlease continue with the task.`,
+            },
+          ],
+          maxTokens: 8192,
+          onChunk: () => {
+            controller.enqueue(encoder.encode(" "));
+          },
+        });
+
+        // Check for API key error
+        if (response.includes("ANTHROPIC_API_KEY not configured")) {
+          await prisma.planningMessage.create({
+            data: {
+              issueId: issue.id,
+              role: "system",
+              type: "error",
+              content: "ANTHROPIC_API_KEY not configured.",
+            },
+          });
+          controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+          controller.close();
+          return;
+        }
+
+        const inputTokens = Math.ceil(
+          (agentRun.prompt.length +
+            (agentRun.output?.length || 0) +
+            humanResponse.length) /
+            4
+        );
+        const outputTokens = Math.ceil(response.length / 4);
+        const cost = estimateCost(inputTokens, outputTokens);
+
+        await prisma.agentRun.update({
+          where: { id: agentRun.id },
+          data: {
+            output: response,
+            status: "completed",
+            tokensUsed: agentRun.tokensUsed + inputTokens + outputTokens,
+            cost: agentRun.cost + cost,
+            iterations: agentRun.iterations + 1,
+            completedAt: new Date(),
+          },
+        });
+
+        await prisma.issue.update({
+          where: { id: issue.id },
+          data: { agentOutput: response, status: "in_review" },
+        });
+
+        await prisma.planningMessage.create({
+          data: {
+            issueId: issue.id,
+            role: "assistant",
+            type: "agent_output",
+            content: response,
+            metadata: JSON.stringify({ runId: agentRun.id, cost }),
+          },
+        });
+
+        // Resolve pending review items
+        await prisma.reviewItem.updateMany({
+          where: { issueId: issue.id, status: "pending", type: "question" },
+          data: { status: "resolved", resolvedAt: new Date() },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: true })));
+        controller.close();
+      } catch (error) {
+        console.error("Agent continuation failed:", error);
+
+        await prisma.planningMessage.create({
+          data: {
+            issueId: issue.id,
+            role: "system",
+            type: "error",
+            content: `Agent execution failed: ${String(error).substring(0, 200)}`,
+          },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+        controller.close();
+      }
+    },
   });
 
-  return NextResponse.json({ success: true, status: "running" });
-}
-
-async function runAgentContinuation(
-  issue: IssueWithProject,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  agentRun: any,
-  humanResponse: string
-) {
-  try {
-    const response = await callClaude({
-      system: agentRun.systemPrompt || undefined,
-      messages: [
-        { role: "user", content: agentRun.prompt },
-        { role: "assistant", content: agentRun.output || "" },
-        {
-          role: "user",
-          content: `Human response to your question: ${humanResponse}\n\nPlease continue with the task.`,
-        },
-      ],
-      maxTokens: 8192,
-    });
-
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
-      await prisma.planningMessage.create({
-        data: {
-          issueId: issue.id,
-          role: "system",
-          type: "error",
-          content: "ANTHROPIC_API_KEY not configured.",
-        },
-      });
-      return;
-    }
-
-    const inputTokens = Math.ceil(
-      (agentRun.prompt.length +
-        (agentRun.output?.length || 0) +
-        humanResponse.length) /
-        4
-    );
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
-
-    await prisma.agentRun.update({
-      where: { id: agentRun.id },
-      data: {
-        output: response,
-        status: "completed",
-        tokensUsed: agentRun.tokensUsed + inputTokens + outputTokens,
-        cost: agentRun.cost + cost,
-        iterations: agentRun.iterations + 1,
-        completedAt: new Date(),
-      },
-    });
-
-    await prisma.issue.update({
-      where: { id: issue.id },
-      data: { agentOutput: response, status: "in_review" },
-    });
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "assistant",
-        type: "agent_output",
-        content: response,
-        metadata: JSON.stringify({ runId: agentRun.id, cost }),
-      },
-    });
-
-    // Resolve pending review items
-    await prisma.reviewItem.updateMany({
-      where: { issueId: issue.id, status: "pending", type: "question" },
-      data: { status: "resolved", resolvedAt: new Date() },
-    });
-  } catch (error) {
-    console.error("Agent continuation failed:", error);
-
-    await prisma.planningMessage.create({
-      data: {
-        issueId: issue.id,
-        role: "system",
-        type: "error",
-        content: `Agent execution failed: ${String(error).substring(0, 200)}`,
-      },
-    });
-  }
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+    },
+  });
 }
 
 async function handleComment(issue: IssueWithProject, message: string) {

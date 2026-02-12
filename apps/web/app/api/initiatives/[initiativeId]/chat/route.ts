@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { callClaude, estimateCost } from "@/lib/ai/claude";
+import { callClaudeStreaming, estimateCost } from "@/lib/ai/claude";
 import { getCurrentUser, requireAuth, handleAuthError } from "@/lib/auth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -147,22 +146,12 @@ async function handleGeneratePlan(initiative: InitiativeWithProject) {
     data: { planStatus: "generating" },
   });
 
-  // Use after() to run the Claude API call after the response is sent.
-  // This prevents the serverless function from timing out waiting for Claude.
-  after(async () => {
-    await runSpecGeneration(initiative);
-  });
-
-  // Return immediately — SWR polling will pick up the result
-  return NextResponse.json({
-    success: true,
-    planStatus: "generating",
-  });
-}
-
-async function runSpecGeneration(initiative: InitiativeWithProject) {
-  try {
-    const response = await callClaude({
+  // Return a streaming response to keep the Netlify function alive
+  // while Claude generates the spec. The client doesn't need the stream
+  // content — SWR polling will pick up the result from the DB.
+  return streamingClaudeCall(
+    initiative.id,
+    {
       system: `You are Lyght's spec agent. You take high-level project descriptions and create detailed technical specifications that can be broken into individual implementation issues.
 
 Your specs must:
@@ -181,7 +170,7 @@ When you encounter ambiguity:
 Output format: JSON matching the CodingPlan schema.`,
       messages: [
         {
-          role: "user",
+          role: "user" as const,
           content: `Project: ${initiative.title}
 Description: ${initiative.description}
 Workspace: ${initiative.project.name}
@@ -214,77 +203,124 @@ Respond in JSON:
         },
       ],
       maxTokens: 8192,
-    });
+    },
+    initiative,
+    "none", // resetPlanStatus on error
+  );
+}
 
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
-      await prisma.planningMessage.create({
-        data: {
-          initiativeId: initiative.id,
-          role: "system",
-          type: "error",
-          content:
-            "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
-        },
-      });
-      await prisma.initiative.update({
-        where: { id: initiative.id },
-        data: { planStatus: "none" },
-      });
-      return;
-    }
+/**
+ * Returns a streaming response that keeps the Netlify function alive
+ * while Claude generates content. Writes the result to DB when done.
+ */
+function streamingClaudeCall(
+  initiativeId: string,
+  claudeParams: {
+    system: string;
+    messages: { role: "user" | "assistant"; content: string }[];
+    maxTokens: number;
+  },
+  initiative: InitiativeWithProject,
+  errorResetStatus: string,
+) {
+  const encoder = new TextEncoder();
 
-    // Estimate cost
-    const inputTokens = Math.ceil(
-      (initiative.title.length + initiative.description.length + 1200) / 4
-    );
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await callClaudeStreaming({
+          ...claudeParams,
+          onChunk: () => {
+            // Send a heartbeat to keep the connection alive
+            controller.enqueue(encoder.encode(" "));
+          },
+        });
 
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
-    const planJson = JSON.stringify(parsed, null, 2);
+        // Check for API key error
+        if (response.includes("ANTHROPIC_API_KEY not configured")) {
+          await prisma.planningMessage.create({
+            data: {
+              initiativeId,
+              role: "system",
+              type: "error",
+              content: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+            },
+          });
+          await prisma.initiative.update({
+            where: { id: initiativeId },
+            data: { planStatus: errorResetStatus },
+          });
+          controller.enqueue(encoder.encode(JSON.stringify({ success: false, planStatus: errorResetStatus })));
+          controller.close();
+          return;
+        }
 
-    // Save plan message
-    await prisma.planningMessage.create({
-      data: {
-        initiativeId: initiative.id,
-        role: "assistant",
-        type: "plan",
-        content: planJson,
-        metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
-      },
-    });
+        // Estimate cost
+        const inputTokens = Math.ceil(
+          (initiative.title.length + initiative.description.length + 1200) / 4
+        );
+        const outputTokens = Math.ceil(response.length / 4);
+        const cost = estimateCost(inputTokens, outputTokens);
 
-    // Update initiative
-    await prisma.initiative.update({
-      where: { id: initiative.id },
-      data: {
-        aiPlan: planJson,
-        aiPrompt: parsed.agentPrompt || "",
-        planStatus: "ready",
-      },
-    });
-  } catch (err) {
-    console.error("Spec generation failed:", err);
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
+        const planJson = JSON.stringify(parsed, null, 2);
 
-    await prisma.planningMessage.create({
-      data: {
-        initiativeId: initiative.id,
-        role: "system",
-        type: "error",
-        content: "Failed to generate spec. Please try again.",
-        metadata: JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      },
-    });
+        // Save plan message
+        await prisma.planningMessage.create({
+          data: {
+            initiativeId,
+            role: "assistant",
+            type: "plan",
+            content: planJson,
+            metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
+          },
+        });
 
-    await prisma.initiative.update({
-      where: { id: initiative.id },
-      data: { planStatus: "none" },
-    });
-  }
+        // Update initiative
+        await prisma.initiative.update({
+          where: { id: initiativeId },
+          data: {
+            aiPlan: planJson,
+            aiPrompt: parsed.agentPrompt || "",
+            planStatus: "ready",
+          },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: true, planStatus: "ready" })));
+        controller.close();
+      } catch (err) {
+        console.error("Spec generation failed:", err);
+
+        await prisma.planningMessage.create({
+          data: {
+            initiativeId,
+            role: "system",
+            type: "error",
+            content: "Failed to generate spec. Please try again.",
+            metadata: JSON.stringify({
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          },
+        });
+
+        await prisma.initiative.update({
+          where: { id: initiativeId },
+          data: { planStatus: errorResetStatus },
+        });
+
+        controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Transfer-Encoding": "chunked",
+    },
+  });
 }
 
 async function handleRevisePlan(initiative: InitiativeWithProject, feedback: string) {
@@ -307,25 +343,14 @@ async function handleRevisePlan(initiative: InitiativeWithProject, feedback: str
     data: { planStatus: "generating" },
   });
 
-  // Use after() to run the revision in the background
-  after(async () => {
-    await runSpecRevision(initiative, feedback);
-  });
-
-  return NextResponse.json({
-    success: true,
-    planStatus: "generating",
-  });
-}
-
-async function runSpecRevision(initiative: InitiativeWithProject, feedback: string) {
-  try {
-    const response = await callClaude({
+  return streamingClaudeCall(
+    initiative.id,
+    {
       system:
         "You are Lyght's spec agent. Revise the technical specification based on human feedback. Return the complete revised spec in JSON.",
       messages: [
         {
-          role: "user",
+          role: "user" as const,
           content: `Project: ${initiative.title}
 Description: ${initiative.description}
 Original Spec: ${initiative.aiPlan}
@@ -336,74 +361,10 @@ Revise the spec to address the feedback. Return the complete revised spec in the
         },
       ],
       maxTokens: 8192,
-    });
-
-    // Check for API key error
-    if (response.includes("ANTHROPIC_API_KEY not configured")) {
-      await prisma.planningMessage.create({
-        data: {
-          initiativeId: initiative.id,
-          role: "system",
-          type: "error",
-          content:
-            "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
-        },
-      });
-      await prisma.initiative.update({
-        where: { id: initiative.id },
-        data: { planStatus: "ready" },
-      });
-      return;
-    }
-
-    const inputTokens = Math.ceil(
-      (initiative.title.length +
-        initiative.description.length +
-        (initiative.aiPlan?.length || 0) +
-        feedback.length) /
-        4
-    );
-    const outputTokens = Math.ceil(response.length / 4);
-    const cost = estimateCost(inputTokens, outputTokens);
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
-    const planJson = JSON.stringify(parsed, null, 2);
-
-    await prisma.planningMessage.create({
-      data: {
-        initiativeId: initiative.id,
-        role: "assistant",
-        type: "plan",
-        content: planJson,
-        metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
-      },
-    });
-
-    await prisma.initiative.update({
-      where: { id: initiative.id },
-      data: {
-        aiPlan: planJson,
-        planStatus: "ready",
-      },
-    });
-  } catch (err) {
-    console.error("Spec revision failed:", err);
-
-    await prisma.planningMessage.create({
-      data: {
-        initiativeId: initiative.id,
-        role: "system",
-        type: "error",
-        content: "Failed to revise spec. Please try again.",
-      },
-    });
-
-    await prisma.initiative.update({
-      where: { id: initiative.id },
-      data: { planStatus: "ready" },
-    });
-  }
+    },
+    initiative,
+    "ready", // on error, reset to "ready" since we have an existing plan
+  );
 }
 
 async function handleApprovePlan(initiative: InitiativeWithProject) {

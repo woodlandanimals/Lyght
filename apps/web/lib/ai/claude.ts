@@ -155,6 +155,51 @@ export async function callClaudeWithTools(params: {
   return { text: "Max tool iterations reached. Please try again.", toolCallCount };
 }
 
+/**
+ * Streaming Claude call — returns the full text once complete,
+ * but uses streaming under the hood to keep the connection alive.
+ * Calls onChunk with partial text as it arrives (for heartbeats).
+ */
+export async function callClaudeStreaming(params: {
+  system?: string;
+  messages: { role: "user" | "assistant"; content: string }[];
+  maxTokens?: number;
+  temperature?: number;
+  onChunk?: (partialText: string) => void;
+}): Promise<string> {
+  const client = getClient();
+
+  if (!client) {
+    return JSON.stringify({
+      error: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
+    });
+  }
+
+  let fullText = "";
+
+  const stream = client.messages.stream({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: params.maxTokens || 8192,
+    temperature: params.temperature || 0.3,
+    system: params.system,
+    messages: params.messages,
+  });
+
+  for await (const event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      event.delta.type === "text_delta"
+    ) {
+      fullText += event.delta.text;
+      if (params.onChunk) {
+        params.onChunk(fullText);
+      }
+    }
+  }
+
+  return fullText;
+}
+
 export function estimateCost(inputTokens: number, outputTokens: number): number {
   // Claude Sonnet pricing (approximate)
   const inputCost = (inputTokens / 1_000_000) * 3;
