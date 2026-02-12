@@ -1,14 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getPreset } from "@/lib/mcp/presets";
+import { requireAuth, handleAuthError } from "@/lib/auth";
+import { encrypt } from "@/lib/crypto";
 
 // PATCH — update a connection
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string; connectionId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { connectionId } = await params;
-  const body = await request.json();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
   const connection = await prisma.mcpConnection.findUnique({
     where: { id: connectionId },
@@ -21,7 +37,12 @@ export async function PATCH(
   const updateData: Record<string, unknown> = {};
   for (const field of allowedFields) {
     if (body[field] !== undefined) {
-      updateData[field] = body[field];
+      // Encrypt authToken before storing
+      if (field === "authToken" && body[field]) {
+        updateData[field] = encrypt(body[field]);
+      } else {
+        updateData[field] = body[field];
+      }
     }
   }
 
@@ -45,6 +66,14 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ projectId: string; connectionId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { connectionId } = await params;
 
   const connection = await prisma.mcpConnection.findUnique({

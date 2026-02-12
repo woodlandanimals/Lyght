@@ -1,15 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUser } from "@/lib/auth";
+import { requireAuth, requireProjectAccess, handleAuthError } from "@/lib/auth";
 import { callClaude } from "@/lib/ai/claude";
 
 export async function POST(request: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
 
-  const { text, projectId } = await request.json();
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { text, projectId } = body;
   if (!text || !projectId) {
     return NextResponse.json({ error: "text and projectId required" }, { status: 400 });
+  }
+
+  let user;
+  try {
+    user = await requireProjectAccess(projectId);
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
   }
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
@@ -69,6 +90,6 @@ Respond in JSON:
 
     return NextResponse.json(issue);
   } catch {
-    return NextResponse.json({ error: "Failed to parse AI response", raw: response }, { status: 500 });
+    return NextResponse.json({ error: "Failed to parse AI response" }, { status: 500 });
   }
 }

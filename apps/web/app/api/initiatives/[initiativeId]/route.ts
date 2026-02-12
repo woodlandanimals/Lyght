@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ initiativeId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { initiativeId } = await params;
 
   const initiative = await prisma.initiative.findUnique({
@@ -32,8 +41,22 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ initiativeId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { initiativeId } = await params;
-  const body = await request.json();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
   const allowedFields = [
     "title", "description", "status", "priority", "leadId",

@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUser } from "@/lib/auth";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ issueId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { issueId } = await params;
 
   const comments = await prisma.comment.findMany({
@@ -21,9 +29,23 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ issueId: string }> }
 ) {
+  let user;
+  try {
+    user = await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { issueId } = await params;
-  const user = await getCurrentUser();
-  const body = await request.json();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
   const comment = await prisma.comment.create({
     data: {

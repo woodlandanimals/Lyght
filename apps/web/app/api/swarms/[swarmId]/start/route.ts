@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ swarmId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { swarmId } = await params;
 
   const swarm = await prisma.swarm.findUnique({
@@ -30,7 +39,10 @@ export async function POST(
     try {
       const res = await fetch(new URL("/api/ai/execute-task", request.url).toString(), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Cookie": request.headers.get("cookie") || "",
+        },
         body: JSON.stringify({ issueId: issue.id }),
       });
       const data = await res.json();

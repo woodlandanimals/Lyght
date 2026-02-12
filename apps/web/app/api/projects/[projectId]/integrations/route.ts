@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { MCP_PRESETS, getPreset } from "@/lib/mcp/presets";
 import { discoverTools } from "@/lib/mcp/client";
+import { requireProjectAccess, handleAuthError } from "@/lib/auth";
+import { encrypt } from "@/lib/crypto";
 
 // GET — list all connections + available presets for a project
 export async function GET(
@@ -9,6 +11,14 @@ export async function GET(
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   const { projectId } = await params;
+
+  try {
+    await requireProjectAccess(projectId);
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
 
   const connections = await prisma.mcpConnection.findMany({
     where: { projectId },
@@ -47,7 +57,22 @@ export async function POST(
   { params }: { params: Promise<{ projectId: string }> }
 ) {
   const { projectId } = await params;
-  const body = await request.json();
+
+  try {
+    await requireProjectAccess(projectId);
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const { serverId, url, authToken } = body;
 
   if (!serverId) {
@@ -76,7 +101,7 @@ export async function POST(
       transport: preset.defaultTransport,
       url: url || preset.defaultUrl,
       authType: preset.authType,
-      authToken: authToken || null,
+      authToken: authToken ? encrypt(authToken) : null,
       status: "disconnected",
       enabled: true,
     },

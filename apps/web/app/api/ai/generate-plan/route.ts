@@ -1,9 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { callClaude } from "@/lib/ai/claude";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
-  const { issueId } = await request.json();
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { issueId } = body;
   if (!issueId) return NextResponse.json({ error: "issueId required" }, { status: 400 });
 
   const issue = await prisma.issue.findUnique({
@@ -89,6 +105,6 @@ Respond in JSON:
       where: { id: issueId },
       data: { planStatus: "none" },
     });
-    return NextResponse.json({ error: "Failed to parse plan", raw: response }, { status: 500 });
+    return NextResponse.json({ error: "Failed to parse plan" }, { status: 500 });
   }
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { callClaude, estimateCost } from "@/lib/ai/claude";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, requireAuth, handleAuthError } from "@/lib/auth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type InitiativeWithProject = any;
@@ -11,6 +11,14 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ initiativeId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { initiativeId } = await params;
 
   const initiative = await prisma.initiative.findUnique({
@@ -44,8 +52,23 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ initiativeId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { initiativeId } = await params;
-  const body = await request.json();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const { message, action = "comment" } = body;
 
   const initiative = await prisma.initiative.findUnique({

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { decrypt } from "@/lib/crypto";
 
 /**
  * Dynamically import MCP SDK modules (ESM-only package).
@@ -31,6 +32,21 @@ interface ConnectionConfig {
   transport: string;
   url: string;
   authToken?: string | null;
+}
+
+/**
+ * Safely decrypt an auth token. Returns null if decryption fails
+ * (e.g., token was stored before encryption was enabled).
+ */
+function safeDecryptToken(token: string | null | undefined): string | null {
+  if (!token) return null;
+  try {
+    return decrypt(token);
+  } catch {
+    // Token may be stored in plaintext (pre-encryption migration)
+    // Return as-is for backward compatibility
+    return token;
+  }
 }
 
 /**
@@ -105,10 +121,13 @@ export async function discoverTools(
   }
 
   try {
-    const { client, close } = await createMcpClient(connection);
+    const { client, close } = await createMcpClient({
+      ...connection,
+      authToken: safeDecryptToken(connection.authToken),
+    });
 
     const result = await client.listTools();
-    const tools: McpToolDef[] = (result.tools || []).map((t) => ({
+    const tools: McpToolDef[] = (result.tools || []).map((t: { name: string; description?: string; inputSchema?: unknown }) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema as Record<string, unknown>,
@@ -167,7 +186,7 @@ export async function testConnection(config: {
     });
 
     const result = await client.listTools();
-    const tools: McpToolDef[] = (result.tools || []).map((t) => ({
+    const tools: McpToolDef[] = (result.tools || []).map((t: { name: string; description?: string; inputSchema?: unknown }) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema as Record<string, unknown>,
@@ -198,7 +217,10 @@ export async function invokeTool(
   if (!connection.url) return { success: false, error: "No server URL" };
 
   try {
-    const { client, close } = await createMcpClient(connection);
+    const { client, close } = await createMcpClient({
+      ...connection,
+      authToken: safeDecryptToken(connection.authToken),
+    });
     const result = await client.callTool({ name: toolName, arguments: args });
     await close();
 

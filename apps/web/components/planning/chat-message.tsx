@@ -53,7 +53,10 @@ export function ChatMessage({
   const [showRevise, setShowRevise] = useState(false);
   const [blockerResponse, setBlockerResponse] = useState("");
 
-  const metadata = message.metadata ? JSON.parse(message.metadata) : null;
+  let metadata = null;
+  if (message.metadata) {
+    try { metadata = JSON.parse(message.metadata); } catch { /* ignore malformed metadata */ }
+  }
 
   switch (message.type) {
     case "text":

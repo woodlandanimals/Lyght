@@ -1,8 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callClaude } from "@/lib/ai/claude";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
-  const { title, description, type } = await request.json();
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { title, description, type } = body;
 
   const response = await callClaude({
     system: "You are a senior product manager. Enhance the given issue with detailed acceptance criteria, edge cases, and technical considerations. Return only the enhanced description as markdown.",

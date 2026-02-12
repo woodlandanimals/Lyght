@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ swarmId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { swarmId } = await params;
 
   const swarm = await prisma.swarm.findUnique({
@@ -26,12 +35,34 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ swarmId: string }> }
 ) {
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
   const { swarmId } = await params;
-  const body = await request.json();
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const allowedFields = ["status", "strategy", "objective", "totalTasks", "completedTasks", "blockedTasks", "activeAgents"];
+  const data: Record<string, unknown> = {};
+  for (const field of allowedFields) {
+    if (body[field] !== undefined) {
+      data[field] = body[field];
+    }
+  }
 
   const swarm = await prisma.swarm.update({
     where: { id: swarmId },
-    data: body,
+    data,
   });
 
   return NextResponse.json(swarm);

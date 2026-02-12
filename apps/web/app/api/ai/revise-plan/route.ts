@@ -1,9 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { callClaude } from "@/lib/ai/claude";
+import { requireAuth, handleAuthError } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
-  const { issueId, feedback } = await request.json();
+  try {
+    await requireAuth();
+  } catch (error) {
+    const authResponse = handleAuthError(error);
+    if (authResponse) return authResponse;
+    throw error;
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const { issueId, feedback } = body;
   if (!issueId || !feedback) {
     return NextResponse.json({ error: "issueId and feedback required" }, { status: 400 });
   }
@@ -56,6 +72,6 @@ Revise the plan to address the feedback. Return the complete revised plan in the
       where: { id: issueId },
       data: { planStatus: "ready" },
     });
-    return NextResponse.json({ error: "Failed to parse revised plan", raw: response }, { status: 500 });
+    return NextResponse.json({ error: "Failed to parse revised plan" }, { status: 500 });
   }
 }

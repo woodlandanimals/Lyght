@@ -1,35 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
+import { rateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
-  const body = await request.json();
+  // Rate limit onboarding to prevent abuse
+  const clientIp = request.headers.get("x-forwarded-for") || "anonymous";
+  const { allowed } = rateLimit(`onboarding:${clientIp}`);
+  if (!allowed) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const { name, email, projectName, projectKey } = body;
 
   if (!name || !email || !projectName || !projectKey) {
     return NextResponse.json({ error: "All fields required" }, { status: 400 });
   }
 
+  // Basic email validation
+  if (typeof email !== "string" || !email.includes("@") || email.length > 255) {
+    return NextResponse.json({ error: "Invalid email" }, { status: 400 });
+  }
+
+  // Sanitize project key — alphanumeric and hyphens only, max 10 chars
+  const sanitizedKey = String(projectKey).toUpperCase().replace(/[^A-Z0-9-]/g, "").substring(0, 10);
+  if (!sanitizedKey || sanitizedKey.length < 2) {
+    return NextResponse.json({ error: "Project key must be 2-10 alphanumeric characters" }, { status: 400 });
+  }
+
   // Create or find user
   let user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
     user = await prisma.user.create({
-      data: { name, email, role: "admin" },
+      data: { name: String(name).substring(0, 100), email, role: "admin" },
     });
   }
 
   // Check if project key exists
-  const existingProject = await prisma.project.findUnique({ where: { key: projectKey } });
+  const existingProject = await prisma.project.findUnique({ where: { key: sanitizedKey } });
   if (existingProject) {
+    // If user is already a member, just log them in
+    const membership = await prisma.projectMember.findFirst({
+      where: { userId: user.id, projectId: existingProject.id },
+    });
+    if (membership) {
+      const cookieStore = await cookies();
+      cookieStore.set("lyght-session", user.id, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 60 * 60 * 24 * 30,
+        path: "/",
+      });
+      return NextResponse.json({ projectId: existingProject.id, userId: user.id });
+    }
     return NextResponse.json({ error: "Project key already exists" }, { status: 400 });
   }
 
   // Create project
   const project = await prisma.project.create({
     data: {
-      name: projectName,
-      key: projectKey,
-      description: `${projectName} — managed by Lyght`,
+      name: String(projectName).substring(0, 100),
+      key: sanitizedKey,
+      description: `${String(projectName).substring(0, 100)} — managed by Lyght`,
       members: {
         create: {
           userId: user.id,
@@ -103,7 +143,7 @@ export async function POST(request: NextRequest) {
   cookieStore.set("lyght-session", user.id, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "strict",
     maxAge: 60 * 60 * 24 * 30,
     path: "/",
   });
