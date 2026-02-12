@@ -19,14 +19,18 @@ async function invokeBackgroundFunction(payload: Record<string, unknown>, reques
 
   console.log(`[initiative-chat] Invoking background function: ${bgUrl}`);
 
-  // Fire-and-forget — the background function returns 202 immediately
-  fetch(bgUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch((err) => {
+  try {
+    // Must await — unawaited fetches get killed when the Lambda shuts down.
+    // Background functions return 202 instantly so this adds <100ms.
+    const res = await fetch(bgUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    console.log(`[initiative-chat] Background function responded: ${res.status}`);
+  } catch (err) {
     console.error("[initiative-chat] Failed to invoke background function:", err);
-  });
+  }
 }
 
 // GET — return all planning messages for an initiative

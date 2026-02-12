@@ -18,13 +18,18 @@ async function invokeBackgroundFunction(payload: Record<string, unknown>, reques
 
   console.log(`[issue-chat] Invoking background function: ${bgUrl}`);
 
-  fetch(bgUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch((err) => {
+  try {
+    // Must await — unawaited fetches get killed when the Lambda shuts down.
+    // Background functions return 202 instantly so this adds <100ms.
+    const res = await fetch(bgUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    console.log(`[issue-chat] Background function responded: ${res.status}`);
+  } catch (err) {
     console.error("[issue-chat] Failed to invoke background function:", err);
-  });
+  }
 }
 
 // GET — return all planning messages for an issue
