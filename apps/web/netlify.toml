@@ -10,5 +10,6 @@
   NEXT_PRIVATE_STANDALONE = "true"
 
 [functions]
+  directory = "netlify/functions"
   external_node_modules = ["@prisma/client"]
   node_bundler = "esbuild"

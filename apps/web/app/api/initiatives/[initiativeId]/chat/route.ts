@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { callClaudeStreaming, estimateCost } from "@/lib/ai/claude";
 import { getCurrentUser, requireAuth, handleAuthError } from "@/lib/auth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -8,6 +7,27 @@ type InitiativeWithProject = any;
 
 // Stale generation timeout — if "generating" for more than 2 minutes, auto-reset
 const STALE_GENERATION_MS = 2 * 60 * 1000;
+
+/**
+ * Invoke the Netlify background function for long-running AI work.
+ * Background functions return 202 immediately and run for up to 15 minutes.
+ */
+async function invokeBackgroundFunction(payload: Record<string, unknown>, request: NextRequest) {
+  // Build absolute URL for the background function
+  const origin = request.nextUrl.origin;
+  const bgUrl = `${origin}/.netlify/functions/generate-plan-background`;
+
+  console.log(`[initiative-chat] Invoking background function: ${bgUrl}`);
+
+  // Fire-and-forget — the background function returns 202 immediately
+  fetch(bgUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch((err) => {
+    console.error("[initiative-chat] Failed to invoke background function:", err);
+  });
+}
 
 // GET — return all planning messages for an initiative
 export async function GET(
@@ -111,10 +131,10 @@ export async function POST(
 
   switch (action) {
     case "generate_plan":
-      return handleGeneratePlan(initiative);
+      return handleGeneratePlan(initiative, request);
 
     case "revise_plan":
-      return handleRevisePlan(initiative, message);
+      return handleRevisePlan(initiative, message, request);
 
     case "approve_plan":
       return handleApprovePlan(initiative);
@@ -130,7 +150,7 @@ export async function POST(
 
 // --- Action Handlers ---
 
-async function handleGeneratePlan(initiative: InitiativeWithProject) {
+async function handleGeneratePlan(initiative: InitiativeWithProject, request: NextRequest) {
   // Create "generating" system message
   await prisma.planningMessage.create({
     data: {
@@ -146,184 +166,24 @@ async function handleGeneratePlan(initiative: InitiativeWithProject) {
     data: { planStatus: "generating" },
   });
 
-  // Return a streaming response to keep the Netlify function alive
-  // while Claude generates the spec. The client doesn't need the stream
-  // content — SWR polling will pick up the result from the DB.
-  return streamingClaudeCall(
-    initiative.id,
-    {
-      system: `You are Lyght's spec agent. You take high-level project descriptions and create detailed technical specifications that can be broken into individual implementation issues.
+  // Invoke Netlify background function (runs up to 15 min)
+  await invokeBackgroundFunction({
+    entityType: "initiative",
+    entityId: initiative.id,
+    action: "generate_plan",
+    title: initiative.title,
+    description: initiative.description,
+    projectName: initiative.project.name,
+    repoUrl: initiative.project.repoUrl,
+  }, request);
 
-Your specs must:
-- Define the SCOPE clearly with in/out boundaries
-- Break down into DISCRETE tasks that can each be a separate issue
-- Each task should be independently implementable by an AI coding agent
-- Include architecture decisions with rationale
-- Identify risks and dependencies between tasks
-- Estimate effort per task
-
-When you encounter ambiguity:
-- Flag it as a "decision_needed" item
-- Provide 2-3 options with tradeoffs
-- DO NOT make major architectural decisions — escalate to the human
-
-Output format: JSON matching the CodingPlan schema.`,
-      messages: [
-        {
-          role: "user" as const,
-          content: `Project: ${initiative.title}
-Description: ${initiative.description}
-Workspace: ${initiative.project.name}
-Tech Stack: Next.js 16, TypeScript, Prisma, SQLite, Tailwind CSS v4
-Repository: ${initiative.project.repoUrl || "N/A"}
-
-Create a technical specification that can be broken into individual issues for AI agents to implement.
-
-Respond in JSON:
-{
-  "objective": "...",
-  "approach": "...",
-  "tasks": [
-    {
-      "id": "T1",
-      "title": "Issue title for this task",
-      "description": "Detailed description including acceptance criteria",
-      "filesToModify": ["path/to/file.ts"],
-      "filesToCreate": ["path/to/new.ts"],
-      "dependsOn": [],
-      "verification": "How to verify this task is done",
-      "estimateMinutes": 60,
-      "priority": "high",
-      "type": "task"
-    }
-  ],
-  "risks": ["..."],
-  "totalEstimateMinutes": 480
-}`,
-        },
-      ],
-      maxTokens: 8192,
-    },
-    initiative,
-    "none", // resetPlanStatus on error
-  );
-}
-
-/**
- * Returns a streaming response that keeps the Netlify function alive
- * while Claude generates content. Writes the result to DB when done.
- */
-function streamingClaudeCall(
-  initiativeId: string,
-  claudeParams: {
-    system: string;
-    messages: { role: "user" | "assistant"; content: string }[];
-    maxTokens: number;
-  },
-  initiative: InitiativeWithProject,
-  errorResetStatus: string,
-) {
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        const response = await callClaudeStreaming({
-          ...claudeParams,
-          onChunk: () => {
-            // Send a heartbeat to keep the connection alive
-            controller.enqueue(encoder.encode(" "));
-          },
-        });
-
-        // Check for API key error
-        if (response.includes("ANTHROPIC_API_KEY not configured")) {
-          await prisma.planningMessage.create({
-            data: {
-              initiativeId,
-              role: "system",
-              type: "error",
-              content: "ANTHROPIC_API_KEY not configured. Set it in .env.local to enable AI features.",
-            },
-          });
-          await prisma.initiative.update({
-            where: { id: initiativeId },
-            data: { planStatus: errorResetStatus },
-          });
-          controller.enqueue(encoder.encode(JSON.stringify({ success: false, planStatus: errorResetStatus })));
-          controller.close();
-          return;
-        }
-
-        // Estimate cost
-        const inputTokens = Math.ceil(
-          (initiative.title.length + initiative.description.length + 1200) / 4
-        );
-        const outputTokens = Math.ceil(response.length / 4);
-        const cost = estimateCost(inputTokens, outputTokens);
-
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : response);
-        const planJson = JSON.stringify(parsed, null, 2);
-
-        // Save plan message
-        await prisma.planningMessage.create({
-          data: {
-            initiativeId,
-            role: "assistant",
-            type: "plan",
-            content: planJson,
-            metadata: JSON.stringify({ cost, inputTokens, outputTokens }),
-          },
-        });
-
-        // Update initiative
-        await prisma.initiative.update({
-          where: { id: initiativeId },
-          data: {
-            aiPlan: planJson,
-            aiPrompt: parsed.agentPrompt || "",
-            planStatus: "ready",
-          },
-        });
-
-        controller.enqueue(encoder.encode(JSON.stringify({ success: true, planStatus: "ready" })));
-        controller.close();
-      } catch (err) {
-        console.error("Spec generation failed:", err);
-
-        await prisma.planningMessage.create({
-          data: {
-            initiativeId,
-            role: "system",
-            type: "error",
-            content: "Failed to generate spec. Please try again.",
-            metadata: JSON.stringify({
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          },
-        });
-
-        await prisma.initiative.update({
-          where: { id: initiativeId },
-          data: { planStatus: errorResetStatus },
-        });
-
-        controller.enqueue(encoder.encode(JSON.stringify({ success: false })));
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Transfer-Encoding": "chunked",
-    },
+  return NextResponse.json({
+    success: true,
+    planStatus: "generating",
   });
 }
 
-async function handleRevisePlan(initiative: InitiativeWithProject, feedback: string) {
+async function handleRevisePlan(initiative: InitiativeWithProject, feedback: string, request: NextRequest) {
   if (!feedback?.trim()) {
     return NextResponse.json({ error: "Feedback required" }, { status: 400 });
   }
@@ -343,28 +203,21 @@ async function handleRevisePlan(initiative: InitiativeWithProject, feedback: str
     data: { planStatus: "generating" },
   });
 
-  return streamingClaudeCall(
-    initiative.id,
-    {
-      system:
-        "You are Lyght's spec agent. Revise the technical specification based on human feedback. Return the complete revised spec in JSON.",
-      messages: [
-        {
-          role: "user" as const,
-          content: `Project: ${initiative.title}
-Description: ${initiative.description}
-Original Spec: ${initiative.aiPlan}
+  // Invoke Netlify background function
+  await invokeBackgroundFunction({
+    entityType: "initiative",
+    entityId: initiative.id,
+    action: "revise_plan",
+    title: initiative.title,
+    description: initiative.description,
+    feedback,
+    existingPlan: initiative.aiPlan,
+  }, request);
 
-Human Feedback: ${feedback}
-
-Revise the spec to address the feedback. Return the complete revised spec in the same JSON format.`,
-        },
-      ],
-      maxTokens: 8192,
-    },
-    initiative,
-    "ready", // on error, reset to "ready" since we have an existing plan
-  );
+  return NextResponse.json({
+    success: true,
+    planStatus: "generating",
+  });
 }
 
 async function handleApprovePlan(initiative: InitiativeWithProject) {
