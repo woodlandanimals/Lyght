@@ -15,7 +15,7 @@ interface InvitationData {
 export default function InviteAcceptPage() {
   const router = useRouter();
   const params = useParams();
-  const token = params.token as string;
+  const token = params?.token as string;
 
   const [invitation, setInvitation] = useState<InvitationData | null>(null);
   const [loading, setLoading] = useState(true);

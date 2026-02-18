@@ -13,7 +13,9 @@ import Anthropic from "@anthropic-ai/sdk";
 // Standalone PrismaClient — not shared with the App Router singleton
 const prisma = new PrismaClient();
 
-export const config = {
+// Netlify-specific config — tells @netlify/plugin-nextjs to run this as a background function
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const config: any = {
   type: "experimental-background",
 };
 

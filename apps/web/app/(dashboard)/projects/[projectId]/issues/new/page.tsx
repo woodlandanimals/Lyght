@@ -12,7 +12,7 @@ import { TypeSelect } from "@/components/issues/type-select";
 export default function NewIssuePage() {
   const router = useRouter();
   const params = useParams();
-  const projectId = params.projectId as string;
+  const projectId = params?.projectId as string;
 
   const [mode, setMode] = useState<"quick" | "form">("form");
   const [text, setText] = useState("");
