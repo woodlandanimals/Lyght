@@ -113,7 +113,7 @@ async function callClaude(params: {
   }
 
   const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-5",
     max_tokens: params.maxTokens || 8192,
     temperature: 0.3,
     system: params.system,
