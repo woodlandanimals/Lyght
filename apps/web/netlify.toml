@@ -8,15 +8,3 @@
 [build.environment]
   NODE_VERSION = "20"
   NEXT_PRIVATE_STANDALONE = "true"
-
-[functions]
-  directory = "netlify/functions"
-  external_node_modules = ["@prisma/client"]
-  node_bundler = "esbuild"
-
-# Ensure background function is routed directly, not intercepted by Next.js handler
-[[redirects]]
-  from = "/.netlify/functions/generate-plan-background"
-  to = "/.netlify/functions/generate-plan-background"
-  status = 200
-  force = true

@@ -1,24 +1,25 @@
 /**
- * Netlify Background Function for AI plan/spec generation.
+ * Background API route for AI plan/spec generation (Netlify).
  *
- * Background functions can run up to 15 minutes, bypassing the
- * 10-26s timeout on regular Netlify serverless functions.
+ * Using Pages Router with `experimental-background` config so Netlify
+ * returns 202 immediately and runs this handler for up to 15 minutes.
  *
- * The client receives a 202 immediately; this function runs in
- * the background and writes results directly to the database.
- * The frontend polls via SWR to pick up the results.
+ * The frontend polls via SWR to pick up DB results.
  */
-import type { Context } from "@netlify/functions";
+import type { NextApiRequest, NextApiResponse } from "next";
 import { PrismaClient } from "@prisma/client";
 import Anthropic from "@anthropic-ai/sdk";
 
+// Standalone PrismaClient — not shared with the App Router singleton
 const prisma = new PrismaClient();
+
+export const config = {
+  type: "experimental-background",
+};
 
 function getAnthropicClient() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === "your-key-here") {
-    return null;
-  }
+  if (!apiKey || apiKey === "your-key-here") return null;
   return new Anthropic({ apiKey });
 }
 
@@ -32,19 +33,15 @@ interface GenerateRequest {
   entityType: "initiative" | "issue";
   entityId: string;
   action: "generate_plan" | "revise_plan" | "execute" | "respond";
-  // For generate_plan
   title?: string;
   description?: string;
   projectName?: string;
   repoUrl?: string;
-  // For revise_plan
   feedback?: string;
   existingPlan?: string;
-  // For execute
   prompt?: string;
   systemPrompt?: string;
   agentRunId?: string;
-  // For respond (continue agent)
   humanResponse?: string;
   previousOutput?: string;
   previousPrompt?: string;
@@ -54,31 +51,31 @@ interface GenerateRequest {
     cost: number;
     iterations: number;
   };
-  // Current status for conditional updates
   currentStatus?: string;
 }
 
-export default async (req: Request, _context: Context) => {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Background functions don't send a response to the client (202 is auto-sent),
+  // but we still run the full handler.
+  if (req.method !== "POST") {
+    res.status(405).end();
+    return;
+  }
+
   try {
-    const body: GenerateRequest = await req.json();
+    const body: GenerateRequest = req.body;
     const { entityType, entityId, action } = body;
 
     console.log(`[background] Starting ${action} for ${entityType} ${entityId}`);
 
     switch (action) {
       case "generate_plan":
-        if (entityType === "initiative") {
-          await generateInitiativeSpec(body);
-        } else {
-          await generateIssuePlan(body);
-        }
+        if (entityType === "initiative") await generateInitiativeSpec(body);
+        else await generateIssuePlan(body);
         break;
       case "revise_plan":
-        if (entityType === "initiative") {
-          await reviseInitiativeSpec(body);
-        } else {
-          await reviseIssuePlan(body);
-        }
+        if (entityType === "initiative") await reviseInitiativeSpec(body);
+        else await reviseIssuePlan(body);
         break;
       case "execute":
         await executeAgent(body);
@@ -96,9 +93,7 @@ export default async (req: Request, _context: Context) => {
   } finally {
     await prisma.$disconnect();
   }
-
-  return new Response();
-};
+}
 
 // --- Helpers ---
 
@@ -108,9 +103,7 @@ async function callClaude(params: {
   maxTokens?: number;
 }): Promise<string> {
   const client = getAnthropicClient();
-  if (!client) {
-    return "ANTHROPIC_API_KEY not configured";
-  }
+  if (!client) return "ANTHROPIC_API_KEY not configured";
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -189,7 +182,9 @@ Respond in JSON:
       return;
     }
 
-    const inputTokens = Math.ceil(((title?.length || 0) + (description?.length || 0) + 1200) / 4);
+    const inputTokens = Math.ceil(
+      ((title?.length || 0) + (description?.length || 0) + 1200) / 4,
+    );
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
@@ -248,7 +243,9 @@ Revise the spec to address the feedback. Return the complete revised spec in the
       return;
     }
 
-    const inputTokens = Math.ceil(((title?.length || 0) + (description?.length || 0) + (existingPlan?.length || 0) + (feedback?.length || 0)) / 4);
+    const inputTokens = Math.ceil(
+      ((title?.length || 0) + (description?.length || 0) + (existingPlan?.length || 0) + (feedback?.length || 0)) / 4,
+    );
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
@@ -341,7 +338,9 @@ Respond in JSON:
       return;
     }
 
-    const inputTokens = Math.ceil(((title?.length || 0) + (description?.length || 0) + 800) / 4);
+    const inputTokens = Math.ceil(
+      ((title?.length || 0) + (description?.length || 0) + 800) / 4,
+    );
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
@@ -401,7 +400,9 @@ Revise the plan to address the feedback. Return the complete revised plan in the
       return;
     }
 
-    const inputTokens = Math.ceil(((title?.length || 0) + (description?.length || 0) + (existingPlan?.length || 0) + (feedback?.length || 0)) / 4);
+    const inputTokens = Math.ceil(
+      ((title?.length || 0) + (description?.length || 0) + (existingPlan?.length || 0) + (feedback?.length || 0)) / 4,
+    );
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
@@ -470,7 +471,6 @@ async function executeAgent(body: GenerateRequest) {
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
-    // Try to parse structured response
     let status = "completed";
     let blockerType = null;
     let blockerMessage = null;
@@ -585,7 +585,9 @@ async function continueAgent(body: GenerateRequest) {
       return;
     }
 
-    const inputTokens = Math.ceil((previousPrompt.length + (previousOutput?.length || 0) + humanResponse.length) / 4);
+    const inputTokens = Math.ceil(
+      (previousPrompt.length + (previousOutput?.length || 0) + humanResponse.length) / 4,
+    );
     const outputTokens = Math.ceil(response.length / 4);
     const cost = estimateCost(inputTokens, outputTokens);
 
