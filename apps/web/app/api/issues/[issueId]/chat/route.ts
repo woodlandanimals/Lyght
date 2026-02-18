@@ -9,13 +9,13 @@ type IssueWithProject = any;
 const STALE_GENERATION_MS = 2 * 60 * 1000;
 
 /**
- * Invoke the background API route for long-running AI work.
- * Uses Pages Router with experimental-background config so Netlify
- * returns 202 immediately and runs the handler for up to 15 minutes.
+ * Invoke the Netlify background function for long-running AI work.
+ * Background functions return 202 immediately and run for up to 15 minutes.
+ * Uses _redirects with force (!) to bypass the Next.js handler.
  */
 async function invokeBackgroundFunction(payload: Record<string, unknown>, request: NextRequest) {
   const origin = process.env.URL || `https://${request.headers.get("host")}`;
-  const bgUrl = `${origin}/api/generate-plan`;
+  const bgUrl = `${origin}/.netlify/functions/generate-plan-background`;
 
   console.log(`[issue-chat] Invoking background function: ${bgUrl}`);
 

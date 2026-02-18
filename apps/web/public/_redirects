@@ -1,0 +1,2 @@
+# Route background function directly — bypass Next.js handler
+/.netlify/functions/generate-plan-background /.netlify/functions/generate-plan-background 200!
