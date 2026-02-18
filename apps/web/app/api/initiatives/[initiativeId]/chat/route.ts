@@ -15,7 +15,7 @@ const STALE_GENERATION_MS = 2 * 60 * 1000;
  */
 async function invokeBackgroundFunction(payload: Record<string, unknown>, request: NextRequest) {
   const origin = process.env.URL || `https://${request.headers.get("host")}`;
-  const bgUrl = `${origin}/.netlify/functions/generate-plan-background`;
+  const bgUrl = `${origin}/api/bg/generate-plan-background`;
 
   console.log(`[initiative-chat] Invoking background function: ${bgUrl}`);
 

@@ -1,2 +1,2 @@
-# Route background function directly — bypass Next.js handler
-/.netlify/functions/generate-plan-background /.netlify/functions/generate-plan-background 200!
+# Alias to invoke background function — bypasses Next.js handler catch-all
+/api/bg/* /.netlify/functions/:splat 200!
