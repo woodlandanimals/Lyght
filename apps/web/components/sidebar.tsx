@@ -27,7 +27,7 @@ interface SidebarProps {
 
 const navItems = [
   { label: "Issues", icon: "\u229E", path: "issues" },
-  { label: "Initiatives", icon: "\u25A7", path: "initiatives" },
+  { label: "Projects", icon: "\u25A7", path: "initiatives" },
   { label: "Board", icon: "\u25CE", path: "board" },
   { label: "Swarms", icon: "\u2295", path: "swarms" },
   { label: "AG-DASH", icon: "\u25C8", path: "agents" },
