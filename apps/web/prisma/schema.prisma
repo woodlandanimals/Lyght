@@ -278,7 +278,7 @@ model Initiative {
   number      Int
   title       String
   description String   @default("")
-  status      String   @default("planned")
+  status      String   @default("triage")
   priority    String   @default("medium")
 
   projectId   String

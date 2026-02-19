@@ -11,11 +11,13 @@ interface Initiative {
 }
 
 const statusFlow: Record<string, string[]> = {
-  planned: ["in_progress", "cancelled"],
-  in_progress: ["paused", "completed", "cancelled"],
-  paused: ["in_progress", "cancelled"],
-  completed: [],
-  cancelled: ["planned"],
+  triage:    ["planning"],
+  planning:  ["make", "cancelled"],
+  make:      ["review", "paused", "cancelled"],
+  paused:    ["make", "cancelled"],
+  review:    ["done", "make"],
+  done:      [],
+  cancelled: ["triage"],
 };
 
 export function InitiativeActions({ initiative }: { initiative: Initiative }) {
@@ -48,7 +50,7 @@ export function InitiativeActions({ initiative }: { initiative: Initiative }) {
           onClick={() => changeStatus(s)}
           loading={loading === s}
         >
-          {s.replace("_", " ").toUpperCase()}
+          {s.toUpperCase()}
         </Button>
       ))}
     </div>

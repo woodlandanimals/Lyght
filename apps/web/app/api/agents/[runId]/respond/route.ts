@@ -72,7 +72,7 @@ export async function POST(
 
   await prisma.issue.update({
     where: { id: agentRun.issueId },
-    data: { agentOutput: response, status: "in_review" },
+    data: { agentOutput: response, status: "review" },
   });
 
   // Sync to planning chat thread

@@ -14,6 +14,7 @@ interface Issue {
   priority: string;
   type: string;
   planStatus: string;
+  swarmId: string | null;
 }
 
 interface Column {
@@ -82,6 +83,11 @@ export function BoardView({
                   <span className="text-[11px] text-lyght-grey-500 font-mono">
                     {projectKey}-{issue.number}
                   </span>
+                  {issue.status === "make" && issue.swarmId && (
+                    <span className="text-[10px] uppercase tracking-[0.08em] font-mono bg-lyght-orange/10 text-lyght-orange px-1.5 py-0.5 rounded-full ml-auto">
+                      SWARM
+                    </span>
+                  )}
                 </div>
                 <div className="text-[13px] text-lyght-black font-mono leading-tight mb-2">
                   {issue.title}

@@ -12,13 +12,12 @@ interface Issue {
 }
 
 const statusFlow: Record<string, string[]> = {
-  triage: ["planning"],
-  planning: ["triage"],
-  planned: ["ready", "planning"],
-  ready: ["in_progress", "planning"],
-  in_progress: ["in_review", "ready"],
-  in_review: ["done", "in_progress"],
-  done: ["closed"],
+  triage:    ["planning"],
+  planning:  ["make", "triage"],
+  make:      ["review", "planning"],
+  review:    ["done", "make"],
+  done:      [],
+  cancelled: [],
 };
 
 export function IssueActions({ issue, projectId }: { issue: Issue; projectId: string }) {
@@ -51,7 +50,7 @@ export function IssueActions({ issue, projectId }: { issue: Issue; projectId: st
           onClick={() => changeStatus(s)}
           loading={loading === s}
         >
-          {s === "planning" ? "PLAN" : s.replace("_", " ").toUpperCase()}
+          {s === "planning" ? "PLAN" : s.toUpperCase()}
         </Button>
       ))}
     </div>

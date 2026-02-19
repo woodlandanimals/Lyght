@@ -37,7 +37,7 @@ export async function GET(
   // Add progress info
   const withProgress = initiatives.map((ini) => {
     const total = ini.issues.length;
-    const done = ini.issues.filter((i) => i.status === "done" || i.status === "closed").length;
+    const done = ini.issues.filter((i) => i.status === "done").length;
     return {
       ...ini,
       issueCount: total,

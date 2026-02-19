@@ -66,7 +66,7 @@ Report your output as:
   // Update issue status
   await prisma.issue.update({
     where: { id: issueId },
-    data: { status: "in_progress", agentSessionId: agentRun.id },
+    data: { status: "make", agentSessionId: agentRun.id },
   });
 
   try {
@@ -164,7 +164,7 @@ Report your output as:
       where: { id: issueId },
       data: {
         agentOutput: response,
-        status: status === "waiting_review" ? "in_review" : "in_review",
+        status: "review",
       },
     });
 

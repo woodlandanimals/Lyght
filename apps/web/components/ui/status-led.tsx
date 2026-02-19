@@ -6,29 +6,25 @@ interface StatusLedProps {
 }
 
 const statusColors: Record<string, string> = {
-  triage: "bg-lyght-grey-500",
-  planning: "bg-lyght-blue",
-  planned: "bg-lyght-blue",
-  ready: "bg-lyght-blue",
-  in_progress: "bg-lyght-orange",
-  swarming: "bg-lyght-orange",
-  in_review: "bg-lyght-yellow",
-  done: "bg-lyght-green",
-  closed: "bg-lyght-green",
-  blocked: "bg-lyght-red",
-  // Agent statuses
-  queued: "bg-lyght-grey-500",
-  running: "bg-lyght-orange",
-  waiting_review: "bg-lyght-yellow",
-  completed: "bg-lyght-green",
-  failed: "bg-lyght-red",
+  // Issue / Initiative statuses
+  triage:    "bg-lyght-grey-500",
+  planning:  "bg-lyght-blue",
+  make:      "bg-lyght-orange",
+  review:    "bg-lyght-yellow",
+  done:      "bg-lyght-green",
   cancelled: "bg-lyght-grey-300",
-  // Dashboard agent statuses
-  idle: "bg-lyght-grey-300",
+  paused:    "bg-lyght-yellow",
+  blocked:   "bg-lyght-red",
+  // Agent run statuses
+  queued:         "bg-lyght-grey-500",
+  running:        "bg-lyght-orange",
+  waiting_review: "bg-lyght-yellow",
+  completed:      "bg-lyght-green",
+  failed:         "bg-lyght-red",
+  idle:           "bg-lyght-grey-300",
   // Swarm statuses
-  forming: "bg-lyght-grey-500",
-  active: "bg-lyght-orange",
-  paused: "bg-lyght-yellow",
+  forming:    "bg-lyght-grey-500",
+  active:     "bg-lyght-orange",
   converging: "bg-lyght-blue",
 };
 
@@ -39,8 +35,7 @@ const sizeMap = {
 };
 
 const pulseStatuses = new Set([
-  "in_progress",
-  "swarming",
+  "make",
   "running",
   "active",
 ]);

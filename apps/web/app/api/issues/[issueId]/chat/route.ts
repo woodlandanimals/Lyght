@@ -284,7 +284,7 @@ async function handleApprovePlan(issue: IssueWithProject) {
 
   await prisma.issue.update({
     where: { id: issue.id },
-    data: { planStatus: "approved", status: "ready" },
+    data: { planStatus: "approved", status: "planning" },
   });
 
   return NextResponse.json({
@@ -345,7 +345,7 @@ Report your output as:
 
   await prisma.issue.update({
     where: { id: issue.id },
-    data: { status: "in_progress", agentSessionId: agentRun.id },
+    data: { status: "make", agentSessionId: agentRun.id },
   });
 
   // Invoke Netlify background function

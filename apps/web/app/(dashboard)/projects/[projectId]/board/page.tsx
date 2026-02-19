@@ -1,14 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { BoardView } from "@/components/board/board-view";
-
-const COLUMNS = [
-  { id: "triage", label: "TRIAGE" },
-  { id: "planning", label: "PLANNING" },
-  { id: "ready", label: "READY" },
-  { id: "in_progress", label: "SWARMING" },
-  { id: "in_review", label: "REVIEW" },
-  { id: "done", label: "DONE" },
-];
+import { BOARD_COLUMNS } from "@/lib/statuses";
 
 export default async function BoardPage({
   params,
@@ -23,15 +15,21 @@ export default async function BoardPage({
   const issues = await prisma.issue.findMany({
     where: { projectId },
     orderBy: { number: "asc" },
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      status: true,
+      priority: true,
+      type: true,
+      planStatus: true,
+      swarmId: true,
+    },
   });
 
-  const columns = COLUMNS.map((col) => ({
+  const columns = BOARD_COLUMNS.map((col) => ({
     ...col,
-    issues: issues.filter((i) => {
-      if (col.id === "in_progress") return i.status === "in_progress" || i.status === "swarming";
-      if (col.id === "planning") return i.status === "planning" || i.status === "planned";
-      return i.status === col.id;
-    }),
+    issues: issues.filter((i) => i.status === col.id),
   }));
 
   return (

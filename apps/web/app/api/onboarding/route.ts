@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
       number: 2,
       title: "Design and implement user authentication",
       description: "Build a complete authentication system with login, registration, and session management.",
-      status: "in_progress",
+      status: "make",
       priority: "high",
       type: "feature",
       tags: "auth,security",

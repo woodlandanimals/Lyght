@@ -4,17 +4,7 @@ import { useState } from "react";
 import { Popover } from "@/components/ui/popover";
 import { CommandList } from "@/components/ui/command-list";
 import { StatusLed } from "@/components/ui/status-led";
-
-const statuses = [
-  { id: "triage", label: "Triage" },
-  { id: "planning", label: "Planning" },
-  { id: "planned", label: "Planned" },
-  { id: "ready", label: "Ready" },
-  { id: "in_progress", label: "In Progress" },
-  { id: "in_review", label: "In Review" },
-  { id: "done", label: "Done" },
-  { id: "closed", label: "Closed" },
-];
+import { ISSUE_STATUSES } from "@/lib/statuses";
 
 interface StatusSelectProps {
   value: string;
@@ -25,13 +15,13 @@ interface StatusSelectProps {
 export function StatusSelect({ value, onChange, disabled }: StatusSelectProps) {
   const [open, setOpen] = useState(false);
 
-  const items = statuses.map((s) => ({
+  const items = ISSUE_STATUSES.map((s) => ({
     id: s.id,
     label: s.label,
     icon: <StatusLed status={s.id} size="sm" />,
   }));
 
-  const currentLabel = statuses.find((s) => s.id === value)?.label || value;
+  const currentLabel = ISSUE_STATUSES.find((s) => s.id === value)?.label || value;
 
   return (
     <Popover

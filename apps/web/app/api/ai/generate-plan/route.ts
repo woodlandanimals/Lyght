@@ -95,7 +95,7 @@ Respond in JSON:
         aiPlan: JSON.stringify(parsed, null, 2),
         aiPrompt: parsed.agentPrompt || "",
         planStatus: "ready",
-        status: issue.status === "planning" ? "planned" : issue.status,
+        status: issue.status,
       },
     });
 

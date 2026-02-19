@@ -4,14 +4,7 @@ import { useState } from "react";
 import { Popover } from "@/components/ui/popover";
 import { CommandList } from "@/components/ui/command-list";
 import { StatusLed } from "@/components/ui/status-led";
-
-const statuses = [
-  { id: "planned", label: "Planned" },
-  { id: "in_progress", label: "In Progress" },
-  { id: "paused", label: "Paused" },
-  { id: "completed", label: "Completed" },
-  { id: "cancelled", label: "Cancelled" },
-];
+import { INITIATIVE_STATUSES } from "@/lib/statuses";
 
 interface InitiativeStatusSelectProps {
   value: string;
@@ -26,13 +19,13 @@ export function InitiativeStatusSelect({
 }: InitiativeStatusSelectProps) {
   const [open, setOpen] = useState(false);
 
-  const items = statuses.map((s) => ({
+  const items = INITIATIVE_STATUSES.map((s) => ({
     id: s.id,
     label: s.label,
     icon: <StatusLed status={s.id} size="sm" />,
   }));
 
-  const currentLabel = statuses.find((s) => s.id === value)?.label || value;
+  const currentLabel = INITIATIVE_STATUSES.find((s) => s.id === value)?.label || value;
 
   return (
     <Popover

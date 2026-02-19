@@ -36,21 +36,21 @@ export function ChatInput({
 
   // Determine which quick action to show
   const showGeneratePlan = isInitiative
-    ? planStatus === "none" && (entityStatus === "planned" || entityStatus === "in_progress")
+    ? planStatus === "none" && (entityStatus === "planning" || entityStatus === "make")
     : planStatus === "none" && (entityStatus === "planning" || entityStatus === "triage");
 
   const showExecute =
     !isInitiative &&
     planStatus === "approved" &&
-    entityStatus !== "in_progress" &&
-    entityStatus !== "in_review" &&
+    entityStatus !== "make" &&
+    entityStatus !== "review" &&
     entityStatus !== "done" &&
     !hasBlocker;
 
   const showCreateIssues =
     isInitiative &&
     planStatus === "approved" &&
-    entityStatus !== "completed" &&
+    entityStatus !== "done" &&
     entityStatus !== "cancelled";
 
   return (

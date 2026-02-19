@@ -317,7 +317,7 @@ async function handleCreateIssues(initiative: InitiativeWithProject) {
   // Update initiative status to in_progress
   await prisma.initiative.update({
     where: { id: initiative.id },
-    data: { status: "in_progress" },
+    data: { status: "make" },
   });
 
   return NextResponse.json({

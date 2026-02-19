@@ -1,3 +1,4 @@
+import { ISSUE_STATUSES } from "@/lib/statuses";
 import { prisma } from "@/lib/prisma";
 import { StatusLed } from "@/components/ui/status-led";
 import { Badge } from "@/components/ui/badge";
@@ -107,7 +108,7 @@ function IssueFilters({
   projectId: string;
   current: { status?: string; priority?: string; type?: string };
 }) {
-  const statuses = ["triage", "planning", "planned", "ready", "in_progress", "in_review", "done"];
+  const statuses = ISSUE_STATUSES.map((s) => s.id);
   const priorities = ["urgent", "high", "medium", "low"];
   const types = ["task", "bug", "feature", "epic"];
 

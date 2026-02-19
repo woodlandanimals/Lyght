@@ -31,7 +31,7 @@ export async function POST(
 
   // Start execution for ready issues with approved plans
   const readyIssues = swarm.issues.filter(
-    (i) => i.planStatus === "approved" && (i.status === "ready" || i.status === "planned")
+    (i) => i.planStatus === "approved" && i.status === "planning"
   );
 
   const results = [];

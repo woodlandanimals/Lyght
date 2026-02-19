@@ -365,7 +365,7 @@ Respond in JSON:
         aiPlan: planJson,
         aiPrompt: parsed.agentPrompt || "",
         planStatus: "ready",
-        status: currentStatus === "planning" ? "planned" : currentStatus,
+        status: currentStatus,
       },
     });
   } catch (err) {
@@ -505,7 +505,7 @@ async function executeAgent(body: GenerateRequest) {
 
     await prisma.issue.update({
       where: { id: entityId },
-      data: { agentOutput: response, status: "in_review" },
+      data: { agentOutput: response, status: "review" },
     });
 
     if (status === "waiting_review" && blockerMessage) {
@@ -607,7 +607,7 @@ async function continueAgent(body: GenerateRequest) {
 
     await prisma.issue.update({
       where: { id: entityId },
-      data: { agentOutput: response, status: "in_review" },
+      data: { agentOutput: response, status: "review" },
     });
 
     await prisma.planningMessage.create({

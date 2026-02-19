@@ -42,7 +42,7 @@ export default async function InitiativeDetailPage({
   // Calculate progress
   const issueCount = initiative.issues.length;
   const doneCount = initiative.issues.filter(
-    (i) => i.status === "done" || i.status === "closed"
+    (i) => i.status === "done"
   ).length;
 
   return (

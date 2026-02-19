@@ -1,3 +1,4 @@
+import { INITIATIVE_STATUSES } from "@/lib/statuses";
 import { prisma } from "@/lib/prisma";
 import { StatusLed } from "@/components/ui/status-led";
 import { Badge } from "@/components/ui/badge";
@@ -68,7 +69,7 @@ export default async function InitiativesPage({
             const totalIssues = ini.issues.length;
             const doneIssues = ini.issues.filter(
               (issue) =>
-                issue.status === "done" || issue.status === "closed"
+                issue.status === "done"
             ).length;
             const progressPct =
               totalIssues > 0
@@ -144,13 +145,7 @@ function InitiativeFilters({
   projectId: string;
   current: { status?: string; priority?: string };
 }) {
-  const statuses = [
-    "planned",
-    "in_progress",
-    "paused",
-    "completed",
-    "cancelled",
-  ];
+  const statuses = INITIATIVE_STATUSES.map((s) => s.id);
   const priorities = ["urgent", "high", "medium", "low"];
 
   return (
