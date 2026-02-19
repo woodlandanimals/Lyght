@@ -1,21 +1,10 @@
 import { INITIATIVE_STATUSES } from "@/lib/statuses";
 import { prisma } from "@/lib/prisma";
-import { StatusLed } from "@/components/ui/status-led";
-import { Badge } from "@/components/ui/badge";
+import { getCurrentUser } from "@/lib/auth";
 import { NewInitiativeButton } from "@/components/initiatives/new-initiative-button";
 import { CreateInitiativeModal } from "@/components/initiatives/create-initiative-modal";
+import { InitiativeListClient } from "@/components/initiatives/initiative-list-client";
 import Link from "next/link";
-
-const priorityVariant: Record<
-  string,
-  "orange" | "red" | "yellow" | "blue" | "default"
-> = {
-  urgent: "red",
-  high: "orange",
-  medium: "yellow",
-  low: "blue",
-  none: "default",
-};
 
 export default async function InitiativesPage({
   params,
@@ -27,24 +16,40 @@ export default async function InitiativesPage({
   const { projectId } = await params;
   const filters = await searchParams;
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-  });
-  if (!project)
-    return <div className="text-lyght-grey-500">Project not found</div>;
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!project) return <div className="text-lyght-grey-500">Project not found</div>;
 
   const where: Record<string, unknown> = { projectId };
   if (filters.status) where.status = filters.status;
   if (filters.priority) where.priority = filters.priority;
 
-  const initiatives = await prisma.initiative.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    include: {
-      lead: true,
-      issues: { select: { id: true, status: true } },
-    },
-  });
+  const [initiatives, user] = await Promise.all([
+    prisma.initiative.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        status: true,
+        priority: true,
+        planStatus: true,
+        lead: { select: { id: true, name: true } },
+        issues: { select: { id: true, status: true } },
+      },
+    }),
+    getCurrentUser(),
+  ]);
+
+  // Fetch org members for lead assignment
+  const orgId = user?.organizationMemberships?.[0]?.organizationId;
+  const members = orgId
+    ? await prisma.user.findMany({
+        where: { organizationMemberships: { some: { organizationId: orgId } } },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: "asc" },
+      })
+    : [];
 
   return (
     <div>
@@ -59,79 +64,12 @@ export default async function InitiativesPage({
       <InitiativeFilters projectId={projectId} current={filters} />
 
       {/* Initiative list */}
-      <div>
-        {initiatives.length === 0 ? (
-          <div className="px-4 py-12 text-center text-lyght-grey-500 text-[13px] font-mono">
-            No projects yet. Create one to get started.
-          </div>
-        ) : (
-          initiatives.map((ini, i) => {
-            const totalIssues = ini.issues.length;
-            const doneIssues = ini.issues.filter(
-              (issue) =>
-                issue.status === "done"
-            ).length;
-            const progressPct =
-              totalIssues > 0
-                ? Math.round((doneIssues / totalIssues) * 100)
-                : 0;
-
-            return (
-              <Link
-                key={ini.id}
-                href={`/projects/${projectId}/initiatives/${ini.id}`}
-                className={`
-                  flex items-center gap-4 px-3 py-3 rounded-md
-                  hover:bg-lyght-grey-300/15 transition-colors
-                  ${i < initiatives.length - 1 ? "border-b border-lyght-grey-300/8" : ""}
-                `}
-              >
-                <StatusLed status={ini.status} />
-                <span className="text-[11px] text-lyght-grey-500 font-mono w-[70px] shrink-0">
-                  {project.key}-P{ini.number}
-                </span>
-                <span className="text-[14px] text-lyght-black font-mono flex-1 truncate">
-                  {ini.title}
-                </span>
-                <Badge
-                  variant={priorityVariant[ini.priority] || "default"}
-                >
-                  {ini.priority}
-                </Badge>
-                {totalIssues > 0 && (
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="w-12 h-1.5 bg-lyght-grey-300/30 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-lyght-orange rounded-full transition-all"
-                        style={{ width: `${progressPct}%` }}
-                      />
-                    </div>
-                    <span className="text-[11px] font-mono text-lyght-grey-500 w-8">
-                      {doneIssues}/{totalIssues}
-                    </span>
-                  </div>
-                )}
-                {ini.planStatus !== "none" && (
-                  <Badge
-                    variant={
-                      ini.planStatus === "approved"
-                        ? "green"
-                        : ini.planStatus === "generating"
-                          ? "orange"
-                          : "blue"
-                    }
-                  >
-                    {ini.planStatus === "generating" && (
-                      <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1" />
-                    )}
-                    {ini.planStatus}
-                  </Badge>
-                )}
-              </Link>
-            );
-          })
-        )}
-      </div>
+      <InitiativeListClient
+        initiatives={initiatives}
+        projectId={projectId}
+        projectKey={project.key}
+        members={members}
+      />
 
       <CreateInitiativeModal />
     </div>

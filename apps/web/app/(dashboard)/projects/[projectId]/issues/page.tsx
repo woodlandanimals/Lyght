@@ -1,17 +1,9 @@
 import { ISSUE_STATUSES } from "@/lib/statuses";
 import { prisma } from "@/lib/prisma";
-import { StatusLed } from "@/components/ui/status-led";
-import { Badge } from "@/components/ui/badge";
+import { getCurrentUser } from "@/lib/auth";
 import { NewIssueButton } from "@/components/issues/new-issue-button";
+import { IssueListClient } from "@/components/issues/issue-list-client";
 import Link from "next/link";
-
-const priorityVariant: Record<string, "orange" | "red" | "yellow" | "blue" | "default"> = {
-  urgent: "red",
-  high: "orange",
-  medium: "yellow",
-  low: "blue",
-  none: "default",
-};
 
 export default async function IssuesPage({
   params,
@@ -31,11 +23,33 @@ export default async function IssuesPage({
   if (filters.priority) where.priority = filters.priority;
   if (filters.type) where.type = filters.type;
 
-  const issues = await prisma.issue.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    include: { assignee: true },
-  });
+  const [issues, user] = await Promise.all([
+    prisma.issue.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        status: true,
+        priority: true,
+        type: true,
+        planStatus: true,
+        assignee: { select: { id: true, name: true } },
+      },
+    }),
+    getCurrentUser(),
+  ]);
+
+  // Fetch org members for assignment
+  const orgId = user?.organizationMemberships?.[0]?.organizationId;
+  const members = orgId
+    ? await prisma.user.findMany({
+        where: { organizationMemberships: { some: { organizationId: orgId } } },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: "asc" },
+      })
+    : [];
 
   return (
     <div>
@@ -50,53 +64,12 @@ export default async function IssuesPage({
       <IssueFilters projectId={projectId} current={filters} />
 
       {/* Issue list */}
-      <div>
-        {issues.length === 0 ? (
-          <div className="px-4 py-12 text-center text-lyght-grey-500 text-[13px] font-mono">
-            No issues yet. Create one to get started.
-          </div>
-        ) : (
-          issues.map((issue, i) => (
-            <Link
-              key={issue.id}
-              href={`/projects/${projectId}/issues/${issue.id}`}
-              className={`
-                flex items-center gap-4 px-3 py-2.5 rounded-md
-                hover:bg-lyght-grey-300/15 transition-colors
-                ${i < issues.length - 1 ? "border-b border-lyght-grey-300/8" : ""}
-              `}
-            >
-              <StatusLed status={issue.status} />
-              <span className="text-[11px] text-lyght-grey-500 font-mono w-[60px] shrink-0">
-                {project.key}-{issue.number}
-              </span>
-              <span className="text-[14px] text-lyght-black font-mono flex-1 truncate">
-                {issue.title}
-              </span>
-              <Badge variant={priorityVariant[issue.priority] || "default"}>
-                {issue.priority}
-              </Badge>
-              <Badge>{issue.type}</Badge>
-              {issue.planStatus !== "none" && (
-                <Badge
-                  variant={
-                    issue.planStatus === "approved"
-                      ? "green"
-                      : issue.planStatus === "generating"
-                        ? "orange"
-                        : "blue"
-                  }
-                >
-                  {issue.planStatus === "generating" && (
-                    <span className="inline-block w-2.5 h-2.5 border-[1.5px] border-lyght-orange border-t-transparent rounded-full animate-spin mr-1" />
-                  )}
-                  {issue.planStatus}
-                </Badge>
-              )}
-            </Link>
-          ))
-        )}
-      </div>
+      <IssueListClient
+        issues={issues}
+        projectId={projectId}
+        projectKey={project.key}
+        members={members}
+      />
     </div>
   );
 }
